@@ -296,6 +296,11 @@ export async function recalculateAllPoints(): Promise<void> {
 
   predsSnap.docs.forEach((predDoc) => {
     const pred = predDoc.data();
+    const uid = pred.userId;
+    if (userPoints.has(uid)) {
+      userPoints.get(uid)!.predictions += 1;
+    }
+
     const match = matches.get(pred.matchId);
     if (!match || !match.isFinished) return;
 
@@ -324,11 +329,9 @@ export async function recalculateAllPoints(): Promise<void> {
 
     batch.update(doc(db, "predictions", predDoc.id), { pointsAwarded: points });
 
-    const uid = pred.userId;
     if (userPoints.has(uid)) {
       const u = userPoints.get(uid)!;
       u.total += points;
-      u.predictions += 1;
       if (points === 3 || points === 6 || points === 12) u.exact += 1;
       else if (points > 0) u.winner += 1;
     }
@@ -370,6 +373,31 @@ export async function fixUserProfiles(): Promise<number> {
   });
   await batch.commit();
   return fixed;
+}
+
+// --- Admin: recalculate predictionsCount for all existing users ---
+export async function fixPredictionsCounts(): Promise<number> {
+  const [predsSnap, usersSnap] = await Promise.all([
+    getDocs(collection(db, "predictions")),
+    getDocs(collection(db, "users")),
+  ]);
+
+  const counts = new Map<string, number>();
+  usersSnap.docs.forEach((d) => counts.set(d.id, 0));
+  predsSnap.docs.forEach((d) => {
+    const uid = d.data().userId as string;
+    if (counts.has(uid)) counts.set(uid, (counts.get(uid) ?? 0) + 1);
+  });
+
+  const batch = writeBatch(db);
+  counts.forEach((count, uid) => {
+    batch.update(doc(db, "users", uid), {
+      predictionsCount: count,
+      updatedAt: Timestamp.now(),
+    });
+  });
+  await batch.commit();
+  return predsSnap.docs.length;
 }
 
 // --- Admin: get all users ---

@@ -12,6 +12,8 @@ import {
   seedMatches,
   getAllUsers,
   recalculateAllPoints,
+  fixUserProfiles,
+  fixPredictionsCounts,
 } from "@/lib/firestore";
 import { generateSampleMatches } from "@/lib/seed-data";
 import type { Match, UserProfile } from "@/types";
@@ -31,6 +33,7 @@ import {
   Loader2,
   Wifi,
   Clock,
+  ListChecks,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -52,6 +55,8 @@ export default function AdminPage() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loadingMatches, setLoadingMatches] = useState(true);
   const [recalcLoading, setRecalcLoading] = useState(false);
+  const [fixLoading, setFixLoading] = useState(false);
+  const [fixPredLoading, setFixPredLoading] = useState(false);
   const [seedLoading, setSeedLoading] = useState(false);
   const [syncMatchesLoading, setSyncMatchesLoading] = useState(false);
   const [syncScoresLoading, setSyncScoresLoading] = useState(false);
@@ -191,7 +196,7 @@ export default function AdminPage() {
         </motion.div>
 
         {/* Quick actions */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
           <button
             onClick={handleSeedMatches}
             disabled={seedLoading}
@@ -222,13 +227,55 @@ export default function AdminPage() {
             )}
           </button>
 
-          <div className="glass rounded-2xl p-4">
-            <Trophy size={20} className="text-yellow-400 mb-2" />
-            <p className="font-bold text-white text-sm">Statistiques</p>
+          <button
+            onClick={async () => {
+              setFixLoading(true);
+              try {
+                const n = await fixUserProfiles();
+                toast.success(n > 0 ? `${n} profil(s) réparé(s) !` : "Tous les profils sont OK");
+                const updated = await getAllUsers();
+                setUsers(updated);
+              } catch {
+                toast.error("Erreur lors de la réparation.");
+              } finally {
+                setFixLoading(false);
+              }
+            }}
+            disabled={fixLoading}
+            className="glass rounded-2xl p-4 text-left hover:bg-white/8 transition-all disabled:opacity-50"
+          >
+            <Users size={20} className="text-purple-400 mb-2" />
+            <p className="font-bold text-white text-sm">Réparer les profils</p>
             <p className="text-xs text-white/40 mt-0.5">
-              {matches.length} matchs · {users.length} participants
+              Ajoute les champs manquants aux comptes
             </p>
-          </div>
+            {fixLoading && <Loader2 size={14} className="animate-spin text-purple-400 mt-2" />}
+          </button>
+
+          <button
+            onClick={async () => {
+              setFixPredLoading(true);
+              try {
+                const n = await fixPredictionsCounts();
+                toast.success(`Compteurs mis à jour (${n} pronostics)`);
+                const updated = await getAllUsers();
+                setUsers(updated);
+              } catch {
+                toast.error("Erreur lors du recalcul des pronos.");
+              } finally {
+                setFixPredLoading(false);
+              }
+            }}
+            disabled={fixPredLoading}
+            className="glass rounded-2xl p-4 text-left hover:bg-white/8 transition-all disabled:opacity-50"
+          >
+            <ListChecks size={20} className="text-orange-400 mb-2" />
+            <p className="font-bold text-white text-sm">Recalculer pronos</p>
+            <p className="text-xs text-white/40 mt-0.5">
+              Resynchronise le compteur de pronostics
+            </p>
+            {fixPredLoading && <Loader2 size={14} className="animate-spin text-orange-400 mt-2" />}
+          </button>
         </div>
 
         {/* Tabs */}
