@@ -11,6 +11,7 @@ import {
   onSnapshot,
   Timestamp,
   writeBatch,
+  increment,
   type QueryConstraint,
 } from "firebase/firestore";
 import { db } from "./firebase";
@@ -36,6 +37,7 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
     totalPoints: d.totalPoints ?? 0,
     exactScoresCount: d.exactScoresCount ?? 0,
     correctWinnerCount: d.correctWinnerCount ?? 0,
+    predictionsCount: d.predictionsCount ?? 0,
     createdAt: fromTimestamp(d.createdAt),
     updatedAt: fromTimestamp(d.updatedAt),
   };
@@ -53,36 +55,48 @@ export async function createUserProfile(
     totalPoints: 0,
     exactScoresCount: 0,
     correctWinnerCount: 0,
+    predictionsCount: 0,
     createdAt: Timestamp.now(),
     updatedAt: Timestamp.now(),
   });
 }
 
 export function subscribeLeaderboard(
-  callback: (users: UserProfile[]) => void
+  callback: (users: UserProfile[]) => void,
+  onError?: (err: Error) => void
 ) {
   return onSnapshot(
     query(
       collection(db, "users"),
-      orderBy("totalPoints", "desc"),
-      orderBy("exactScoresCount", "desc")
+      orderBy("totalPoints", "desc")
     ),
     (snap) => {
-      const users = snap.docs.map((d) => {
-        const data = d.data();
-        return {
-          uid: d.id,
-          email: data.email,
-          pseudo: data.pseudo,
-          role: data.role ?? "user",
-          totalPoints: data.totalPoints ?? 0,
-          exactScoresCount: data.exactScoresCount ?? 0,
-          correctWinnerCount: data.correctWinnerCount ?? 0,
-          createdAt: fromTimestamp(data.createdAt),
-          updatedAt: fromTimestamp(data.updatedAt),
-        } as UserProfile;
-      });
+      const users = snap.docs
+        .map((d) => {
+          const data = d.data();
+          return {
+            uid: d.id,
+            email: data.email,
+            pseudo: data.pseudo,
+            role: data.role ?? "user",
+            totalPoints: data.totalPoints ?? 0,
+            exactScoresCount: data.exactScoresCount ?? 0,
+            correctWinnerCount: data.correctWinnerCount ?? 0,
+            predictionsCount: data.predictionsCount ?? 0,
+            createdAt: fromTimestamp(data.createdAt),
+            updatedAt: fromTimestamp(data.updatedAt),
+          } as UserProfile;
+        })
+        .sort((a, b) =>
+          b.totalPoints !== a.totalPoints
+            ? b.totalPoints - a.totalPoints
+            : b.exactScoresCount - a.exactScoresCount
+        );
       callback(users);
+    },
+    (err) => {
+      console.error("subscribeLeaderboard:", err);
+      onError?.(err);
     }
   );
 }
@@ -240,6 +254,7 @@ export async function savePrediction(
   const id = predictionId(userId, matchId);
   const existing = await getDoc(doc(db, "predictions", id));
   const now = Timestamp.now();
+  const isNew = !existing.exists();
 
   await setDoc(doc(db, "predictions", id), {
     userId,
@@ -248,9 +263,15 @@ export async function savePrediction(
     predictedAwayScore,
     predictedQualifiedTeamId,
     pointsAwarded: null,
-    createdAt: existing.exists() ? existing.data().createdAt : now,
+    createdAt: isNew ? now : existing.data().createdAt,
     updatedAt: now,
   });
+
+  if (isNew) {
+    await updateDoc(doc(db, "users", userId), {
+      predictionsCount: increment(1),
+    });
+  }
 }
 
 // --- Score recalculation ---
@@ -264,11 +285,11 @@ export async function recalculateAllPoints(): Promise<void> {
   const matches = new Map(matchesSnap.docs.map((d) => [d.id, matchFromDoc(d)]));
   const userPoints = new Map<
     string,
-    { total: number; exact: number; winner: number }
+    { total: number; exact: number; winner: number; predictions: number }
   >();
 
   usersSnap.docs.forEach((d) => {
-    userPoints.set(d.id, { total: 0, exact: 0, winner: 0 });
+    userPoints.set(d.id, { total: 0, exact: 0, winner: 0, predictions: 0 });
   });
 
   const batch = writeBatch(db);
@@ -307,6 +328,7 @@ export async function recalculateAllPoints(): Promise<void> {
     if (userPoints.has(uid)) {
       const u = userPoints.get(uid)!;
       u.total += points;
+      u.predictions += 1;
       if (points === 3 || points === 6 || points === 12) u.exact += 1;
       else if (points > 0) u.winner += 1;
     }
@@ -317,11 +339,37 @@ export async function recalculateAllPoints(): Promise<void> {
       totalPoints: pts.total,
       exactScoresCount: pts.exact,
       correctWinnerCount: pts.winner,
+      predictionsCount: pts.predictions,
       updatedAt: Timestamp.now(),
     });
   });
 
   await batch.commit();
+}
+
+// --- Admin: fix user profiles missing numeric fields ---
+export async function fixUserProfiles(): Promise<number> {
+  const snap = await getDocs(collection(db, "users"));
+  const batch = writeBatch(db);
+  let fixed = 0;
+  snap.docs.forEach((d) => {
+    const data = d.data();
+    const needs =
+      data.totalPoints === undefined ||
+      data.exactScoresCount === undefined ||
+      data.correctWinnerCount === undefined;
+    if (needs) {
+      batch.update(doc(db, "users", d.id), {
+        totalPoints: data.totalPoints ?? 0,
+        exactScoresCount: data.exactScoresCount ?? 0,
+        correctWinnerCount: data.correctWinnerCount ?? 0,
+        updatedAt: Timestamp.now(),
+      });
+      fixed++;
+    }
+  });
+  await batch.commit();
+  return fixed;
 }
 
 // --- Admin: get all users ---
@@ -339,6 +387,7 @@ export async function getAllUsers(): Promise<UserProfile[]> {
       totalPoints: data.totalPoints ?? 0,
       exactScoresCount: data.exactScoresCount ?? 0,
       correctWinnerCount: data.correctWinnerCount ?? 0,
+      predictionsCount: data.predictionsCount ?? 0,
       createdAt: fromTimestamp(data.createdAt),
       updatedAt: fromTimestamp(data.updatedAt),
     } as UserProfile;

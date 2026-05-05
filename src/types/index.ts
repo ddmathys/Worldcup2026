@@ -49,6 +49,7 @@ export interface UserProfile {
   totalPoints: number;
   exactScoresCount: number;
   correctWinnerCount: number;
+  predictionsCount: number;
   createdAt: Date;
   updatedAt: Date;
 }

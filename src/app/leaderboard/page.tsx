@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
 import Navigation from "@/components/Navigation";
-import { subscribeLeaderboard } from "@/lib/firestore";
+import { subscribeLeaderboard, getMatches } from "@/lib/firestore";
 import type { UserProfile } from "@/types";
-import { Trophy, Star, Target, Loader2, Medal } from "lucide-react";
+import { Trophy, Star, Target, Loader2, Medal, ListChecks } from "lucide-react";
 import clsx from "clsx";
 
 const PODIUM_CONFIG = [
@@ -18,13 +18,22 @@ const PODIUM_CONFIG = [
 export default function LeaderboardPage() {
   const { user, profile } = useAuth();
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [totalMatches, setTotalMatches] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsub = subscribeLeaderboard((u) => {
-      setUsers(u);
-      setLoading(false);
-    });
+    getMatches().then((m) => setTotalMatches(m.length));
+    const unsub = subscribeLeaderboard(
+      (u) => {
+        setUsers(u);
+        setLoading(false);
+      },
+      (err) => {
+        setError(err.message);
+        setLoading(false);
+      }
+    );
     return unsub;
   }, []);
 
@@ -57,6 +66,12 @@ export default function LeaderboardPage() {
           <div className="flex flex-col items-center justify-center py-24 gap-4">
             <Loader2 className="animate-spin text-yellow-400" size={32} />
             <p className="text-white/40">Chargement du classement…</p>
+          </div>
+        ) : error ? (
+          <div className="text-center py-24">
+            <div className="text-5xl mb-4">⚠️</div>
+            <h3 className="text-xl font-bold text-white mb-2">Erreur de chargement</h3>
+            <p className="text-white/40 text-sm">{error}</p>
           </div>
         ) : users.length === 0 ? (
           <div className="text-center py-24">
@@ -148,6 +163,10 @@ export default function LeaderboardPage() {
                         <Target size={10} />
                         {profile.correctWinnerCount} vainqueurs
                       </span>
+                      <span className="flex items-center gap-1">
+                        <ListChecks size={10} />
+                        {profile.predictionsCount}/{totalMatches} pronos
+                      </span>
                     </div>
                   </div>
                   <span className="text-xl font-black text-yellow-400">
@@ -172,6 +191,11 @@ export default function LeaderboardPage() {
                     <th className="text-center px-3 py-3 hidden sm:table-cell">
                       <span className="flex items-center justify-center gap-1">
                         <Target size={11} /> Vainqueurs
+                      </span>
+                    </th>
+                    <th className="text-center px-3 py-3 hidden md:table-cell">
+                      <span className="flex items-center justify-center gap-1">
+                        <ListChecks size={11} /> Pronos
                       </span>
                     </th>
                     <th className="text-right px-4 py-3">Points</th>
@@ -223,6 +247,16 @@ export default function LeaderboardPage() {
                         </td>
                         <td className="text-center px-3 py-3.5 text-sm text-white/50 hidden sm:table-cell">
                           {u.correctWinnerCount}
+                        </td>
+                        <td className="text-center px-3 py-3.5 text-sm hidden md:table-cell">
+                          <span className={clsx(
+                            "font-mono",
+                            u.predictionsCount === totalMatches && totalMatches > 0
+                              ? "text-green-400"
+                              : "text-white/50"
+                          )}>
+                            {u.predictionsCount}/{totalMatches}
+                          </span>
                         </td>
                         <td className="text-right px-4 py-3.5">
                           <span
