@@ -18,6 +18,8 @@ interface MatchCardProps {
   prediction?: Prediction;
   userId: string;
   onSaved?: () => void;
+  onAiGenerate?: () => Promise<void>;
+  aiGenerating?: boolean;
 }
 
 type VisualStatus = "open" | "soon" | "locked" | "live" | "finished";
@@ -31,7 +33,7 @@ function computeStatus(match: Match): VisualStatus {
   return "open";
 }
 
-export default function MatchCard({ match, prediction, userId, onSaved }: MatchCardProps) {
+export default function MatchCard({ match, prediction, userId, onSaved, onAiGenerate, aiGenerating = false }: MatchCardProps) {
   const status = computeStatus(match);
   const isEditable = status === "open" || status === "soon";
   const isKnockout = match.phase !== "group";
@@ -208,20 +210,35 @@ export default function MatchCard({ match, prediction, userId, onSaved }: MatchC
             )}
           </span>
           {isEditable && (
-            <button
-              onClick={handleSave}
-              disabled={saving || homeVal === "" || awayVal === ""}
-              className={clsx(
-                "flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-40",
-                hasPrediction
-                  ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30"
-                  : "bg-yellow-400/20 text-yellow-400 border border-yellow-400/30 hover:bg-yellow-400/30"
+            <div className="flex items-center gap-1.5">
+              {onAiGenerate && (
+                <button
+                  onClick={onAiGenerate}
+                  disabled={aiGenerating || saving}
+                  title="Générer avec l'IA"
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all bg-purple-500/15 text-purple-300 border border-purple-500/25 hover:bg-purple-500/25 disabled:opacity-40"
+                >
+                  {aiGenerating
+                    ? <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                    : <Sparkles size={11} />}
+                  IA
+                </button>
               )}
-            >
-              {saving ? <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
-                : hasPrediction ? <CheckCircle2 size={11} /> : <Save size={11} />}
-              {hasPrediction ? "Modifier" : "Enregistrer"}
-            </button>
+              <button
+                onClick={handleSave}
+                disabled={saving || homeVal === "" || awayVal === ""}
+                className={clsx(
+                  "flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-40",
+                  hasPrediction
+                    ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30"
+                    : "bg-yellow-400/20 text-yellow-400 border border-yellow-400/30 hover:bg-yellow-400/30"
+                )}
+              >
+                {saving ? <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                  : hasPrediction ? <CheckCircle2 size={11} /> : <Save size={11} />}
+                {hasPrediction ? "Modifier" : "Enregistrer"}
+              </button>
+            </div>
           )}
         </div>
       )}

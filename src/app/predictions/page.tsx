@@ -2,18 +2,55 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
 import Navigation from "@/components/Navigation";
 import MatchCard from "@/components/MatchCard";
 import { subscribeMatches, subscribeUserPredictions, savePrediction } from "@/lib/firestore";
 import type { Match, Prediction } from "@/types";
 import toast from "react-hot-toast";
-import { Search, SlidersHorizontal, Loader2, Sparkles, Bot } from "lucide-react";
+import { Search, SlidersHorizontal, Loader2, Sparkles, Bot, X } from "lucide-react";
 import clsx from "clsx";
 
 type PhaseFilter = "all" | "group" | "knockout";
 type StatusFilter = "all" | "open" | "locked" | "finished";
+
+const AI_METHODS = [
+  {
+    key: "ai",
+    label: "IA libre",
+    description: "Meilleur jugement analytique global : classement FIFA, forme récente, contexte historique et conditions du tournoi.",
+  },
+  {
+    key: "fifa",
+    label: "Classement FIFA",
+    description: "Pondéré strictement par le classement FIFA avril 2026. Les favoris gagnent plus souvent, les écarts reflètent la qualité.",
+  },
+  {
+    key: "betting",
+    label: "Cotes paris",
+    description: "Simule les cotes bookmaker : 55% de chance pour le favori, 25% de nul, 20% d'upset.",
+  },
+  {
+    key: "form",
+    label: "Forme actuelle",
+    description: "Basé sur les performances 2025-2026. La forme récente et le momentum pré-tournoi priment sur la réputation.",
+  },
+  {
+    key: "chaos",
+    label: "Mode chaos",
+    description: "Upsets encouragés, scores improbables mais réalistes. Attendez-vous à des résultats surprenants !",
+  },
+] as const;
+
+type AiMethodKey = (typeof AI_METHODS)[number]["key"];
+
+interface OverwriteDialog {
+  message: string;
+  skipLabel?: string;
+  onSkip?: () => void;
+  onOverwrite: () => void;
+}
 
 export default function PredictionsPage() {
   const { user, loading: authLoading } = useAuth();
@@ -25,8 +62,10 @@ export default function PredictionsPage() {
   const [phaseFilter, setPhaseFilter] = useState<PhaseFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [groupFilter, setGroupFilter] = useState("all");
-  const [aiMethod, setAiMethod] = useState("ai");
+  const [aiMethod, setAiMethod] = useState<AiMethodKey>("ai");
   const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiGeneratingMatchId, setAiGeneratingMatchId] = useState<string | null>(null);
+  const [overwriteDialog, setOverwriteDialog] = useState<OverwriteDialog | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) router.push("/login");
@@ -50,8 +89,7 @@ export default function PredictionsPage() {
     const now = new Date();
     if (now >= m.kickoffUtc) return "live";
     if (now >= m.lockAtUtc) return "locked";
-    const diff = m.kickoffUtc.getTime() - now.getTime();
-    if (diff <= 4 * 3600 * 1000) return "soon";
+    if (m.kickoffUtc.getTime() - now.getTime() <= 4 * 3600 * 1000) return "soon";
     return "open";
   }
 
@@ -84,37 +122,19 @@ export default function PredictionsPage() {
   const total = matches.length;
   const filled = matches.filter((m) => predictions.has(m.id)).length;
 
-  async function handleAiGenerate() {
+  // ── Core AI generation ────────────────────────────────────────────────────
+  async function runAiGeneration(matchesToGenerate: Match[]) {
     if (!user) return;
-    const groupMatches = matches.filter(
-      (m) => m.phase === "group" && (groupFilter === "all" || m.groupCode === groupFilter)
-    );
-    const openMatches = groupMatches.filter((m) => {
-      const s = computeStatus(m);
-      return s === "open" || s === "soon";
-    });
-    if (openMatches.length === 0) {
-      toast.error("Aucun match ouvert à pronostiquer dans ce groupe.");
-      return;
-    }
+    setAiGenerating(true);
 
-    const alreadyPredicted = openMatches.filter((m) => predictions.has(m.id));
-    if (alreadyPredicted.length > 0) {
-      const confirmed = confirm(
-        `${alreadyPredicted.length} match(s) ont déjà un pronostic. Écraser et regénérer avec l'IA ?`
-      );
-      if (!confirmed) return;
-    }
-
-    // Group by groupCode for separate API calls
+    // Group by groupCode (or phase for knockout)
     const byGroup = new Map<string, Match[]>();
-    for (const m of openMatches) {
-      const g = m.groupCode!;
+    for (const m of matchesToGenerate) {
+      const g = m.groupCode ?? m.phase;
       if (!byGroup.has(g)) byGroup.set(g, []);
       byGroup.get(g)!.push(m);
     }
 
-    setAiGenerating(true);
     let saved = 0;
     const errors: string[] = [];
 
@@ -143,20 +163,11 @@ export default function PredictionsPage() {
         for (const r of json.results) {
           const match = gMatches.find((m) => m.id === r.id);
           if (!match) continue;
-          await savePrediction(
-            user.uid,
-            r.id,
-            match.lockAtUtc,
-            r.homeScore,
-            r.awayScore,
-            null,
-            true,
-            aiMethod
-          );
+          await savePrediction(user.uid, r.id, match.lockAtUtc, r.homeScore, r.awayScore, null, true, aiMethod);
           saved++;
         }
       } catch (e) {
-        errors.push(`Gr. ${groupCode}: ${e instanceof Error ? e.message : "erreur"}`);
+        errors.push(`${groupCode}: ${e instanceof Error ? e.message : "erreur"}`);
       }
     }
 
@@ -167,6 +178,66 @@ export default function PredictionsPage() {
       toast.success(`${saved} pronostic${saved > 1 ? "s" : ""} IA enregistré${saved > 1 ? "s" : ""} !`);
     }
   }
+
+  // ── Batch generate (current view) ────────────────────────────────────────
+  function handleAiGenerate() {
+    if (!user) return;
+    const scope = groupFilter === "all"
+      ? matches
+      : matches.filter((m) => m.groupCode === groupFilter);
+
+    const openMatches = scope.filter((m) => {
+      const s = computeStatus(m);
+      return s === "open" || s === "soon";
+    });
+
+    if (openMatches.length === 0) {
+      toast.error("Aucun match ouvert dans cette sélection.");
+      return;
+    }
+
+    const withPreds = openMatches.filter((m) => predictions.has(m.id));
+
+    if (withPreds.length > 0) {
+      setOverwriteDialog({
+        message: `${withPreds.length} match${withPreds.length > 1 ? "s ont" : " a"} déjà un pronostic.`,
+        skipLabel: `Ignorer les ${withPreds.length} existant${withPreds.length > 1 ? "s" : ""}`,
+        onSkip: () => {
+          setOverwriteDialog(null);
+          runAiGeneration(openMatches.filter((m) => !predictions.has(m.id)));
+        },
+        onOverwrite: () => {
+          setOverwriteDialog(null);
+          runAiGeneration(openMatches);
+        },
+      });
+    } else {
+      runAiGeneration(openMatches);
+    }
+  }
+
+  // ── Per-match generate ────────────────────────────────────────────────────
+  async function handleAiGenerateMatch(match: Match) {
+    if (!user) return;
+
+    const doGenerate = async () => {
+      setOverwriteDialog(null);
+      setAiGeneratingMatchId(match.id);
+      await runAiGeneration([match]);
+      setAiGeneratingMatchId(null);
+    };
+
+    if (predictions.has(match.id)) {
+      setOverwriteDialog({
+        message: "Ce match a déjà un pronostic.",
+        onOverwrite: doGenerate,
+      });
+    } else {
+      await doGenerate();
+    }
+  }
+
+  const selectedMethod = AI_METHODS.find((m) => m.key === aiMethod)!;
 
   if (authLoading || (!user && !authLoading)) {
     return (
@@ -180,6 +251,7 @@ export default function PredictionsPage() {
     <div className="min-h-screen bg-navy">
       <Navigation />
       <div className="max-w-3xl mx-auto px-4 pt-24 pb-16">
+
         {/* Header */}
         <div className="flex items-start justify-between mb-8">
           <div>
@@ -211,8 +283,7 @@ export default function PredictionsPage() {
         )}
 
         {/* Filters */}
-        <div className="space-y-3 mb-8">
-          {/* Search */}
+        <div className="space-y-3 mb-6">
           <div className="relative">
             <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
             <input
@@ -224,7 +295,6 @@ export default function PredictionsPage() {
             />
           </div>
 
-          {/* Filter row */}
           <div className="flex flex-wrap gap-2">
             <div className="flex items-center gap-1 bg-white/5 rounded-xl p-1 border border-white/10">
               <SlidersHorizontal size={14} className="text-white/30 ml-2" />
@@ -234,9 +304,7 @@ export default function PredictionsPage() {
                   onClick={() => setPhaseFilter(f)}
                   className={clsx(
                     "px-3 py-1.5 rounded-lg text-xs font-semibold transition-all",
-                    phaseFilter === f
-                      ? "bg-yellow-400/20 text-yellow-400"
-                      : "text-white/50 hover:text-white"
+                    phaseFilter === f ? "bg-yellow-400/20 text-yellow-400" : "text-white/50 hover:text-white"
                   )}
                 >
                   {f === "all" ? "Tous" : f === "group" ? "Poules" : "Phases finales"}
@@ -251,9 +319,7 @@ export default function PredictionsPage() {
                   onClick={() => setStatusFilter(f)}
                   className={clsx(
                     "px-3 py-1.5 rounded-lg text-xs font-semibold transition-all",
-                    statusFilter === f
-                      ? "bg-yellow-400/20 text-yellow-400"
-                      : "text-white/50 hover:text-white"
+                    statusFilter === f ? "bg-yellow-400/20 text-yellow-400" : "text-white/50 hover:text-white"
                   )}
                 >
                   {f === "all" ? "Tous" : f === "open" ? "Ouverts" : f === "locked" ? "Verrouillés" : "Terminés"}
@@ -262,14 +328,15 @@ export default function PredictionsPage() {
             </div>
           </div>
 
-          {/* Group filter */}
           {groups.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               <button
                 onClick={() => setGroupFilter("all")}
                 className={clsx(
                   "px-3 py-1 rounded-lg text-xs font-bold transition-all",
-                  groupFilter === "all" ? "bg-yellow-400/20 text-yellow-400 border border-yellow-400/30" : "bg-white/5 text-white/40 hover:text-white border border-white/10"
+                  groupFilter === "all"
+                    ? "bg-yellow-400/20 text-yellow-400 border border-yellow-400/30"
+                    : "bg-white/5 text-white/40 hover:text-white border border-white/10"
                 )}
               >
                 Tous groupes
@@ -280,7 +347,9 @@ export default function PredictionsPage() {
                   onClick={() => setGroupFilter(g === groupFilter ? "all" : g)}
                   className={clsx(
                     "px-3 py-1 rounded-lg text-xs font-bold transition-all",
-                    groupFilter === g ? "bg-yellow-400/20 text-yellow-400 border border-yellow-400/30" : "bg-white/5 text-white/40 hover:text-white border border-white/10"
+                    groupFilter === g
+                      ? "bg-yellow-400/20 text-yellow-400 border border-yellow-400/30"
+                      : "bg-white/5 text-white/40 hover:text-white border border-white/10"
                   )}
                 >
                   Gr. {g}
@@ -291,39 +360,24 @@ export default function PredictionsPage() {
         </div>
 
         {/* AI banner */}
-        {!loadingData && matches.filter(m => m.phase === "group").length > 0 && (
+        {!loadingData && matches.length > 0 && (
           <div className="mb-6 glass rounded-2xl p-4 border border-purple-500/25 bg-purple-500/5">
-            <div className="flex items-start gap-3 mb-3">
-              <div className="w-8 h-8 rounded-xl bg-purple-500/20 flex items-center justify-center flex-shrink-0">
-                <Bot size={16} className="text-purple-400" />
+            {/* Header */}
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-7 h-7 rounded-lg bg-purple-500/20 flex items-center justify-center flex-shrink-0">
+                <Bot size={14} className="text-purple-400" />
               </div>
-              <div>
-                <p className="font-bold text-white text-sm flex items-center gap-1.5">
-                  <Sparkles size={13} className="text-purple-400" />
-                  Pronostics assistés par IA
-                </p>
-                <p className="text-xs text-white/40 mt-0.5">
-                  {groupFilter !== "all"
-                    ? `Génère automatiquement les 6 pronostics du Groupe ${groupFilter}`
-                    : "Sélectionne un groupe pour générer ses pronostics en un clic"}
-                </p>
-              </div>
+              <p className="font-bold text-white text-sm">Pronostics IA</p>
             </div>
 
-            {/* Method pills */}
-            <div className="flex flex-wrap gap-1.5 mb-3">
-              {([
-                { key: "ai", label: "IA libre" },
-                { key: "fifa", label: "FIFA" },
-                { key: "betting", label: "Cotes" },
-                { key: "form", label: "Forme" },
-                { key: "chaos", label: "Chaos" },
-              ] as const).map(({ key, label }) => (
+            {/* Method selector */}
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {AI_METHODS.map(({ key, label }) => (
                 <button
                   key={key}
                   onClick={() => setAiMethod(key)}
                   className={clsx(
-                    "px-2.5 py-1 rounded-lg text-xs font-semibold transition-all",
+                    "px-3 py-1.5 rounded-lg text-xs font-semibold transition-all",
                     aiMethod === key
                       ? "bg-purple-500/30 text-purple-300 border border-purple-500/40"
                       : "bg-white/5 text-white/40 hover:text-white border border-white/10"
@@ -334,22 +388,26 @@ export default function PredictionsPage() {
               ))}
             </div>
 
+            {/* Description of selected method */}
+            <p className="text-xs text-white/40 mb-4 pl-1 border-l-2 border-purple-500/30">
+              {selectedMethod.description}
+            </p>
+
+            {/* Generate button */}
             <button
               onClick={handleAiGenerate}
-              disabled={aiGenerating || groupFilter === "all"}
-              className={clsx(
-                "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all",
-                groupFilter !== "all"
-                  ? "bg-purple-500/25 text-purple-300 border border-purple-500/35 hover:bg-purple-500/35"
-                  : "bg-white/5 text-white/25 border border-white/10 cursor-default"
-              )}
+              disabled={aiGenerating}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all bg-purple-500/25 text-purple-300 border border-purple-500/35 hover:bg-purple-500/35 disabled:opacity-50"
             >
               {aiGenerating ? (
                 <><Loader2 size={14} className="animate-spin" />Génération en cours…</>
-              ) : groupFilter !== "all" ? (
-                <><Sparkles size={14} />Générer le Groupe {groupFilter}</>
               ) : (
-                <><Sparkles size={14} />Sélectionne un groupe ci-dessus</>
+                <>
+                  <Sparkles size={14} />
+                  {groupFilter !== "all"
+                    ? `Générer le Groupe ${groupFilter}`
+                    : "Générer tous les matchs ouverts"}
+                </>
               )}
             </button>
           </div>
@@ -363,13 +421,9 @@ export default function PredictionsPage() {
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-24">
-            <div className="text-5xl mb-4">
-              {matches.length === 0 ? "📅" : "🔍"}
-            </div>
+            <div className="text-5xl mb-4">{matches.length === 0 ? "📅" : "🔍"}</div>
             <h3 className="text-lg font-bold text-white mb-2">
-              {matches.length === 0
-                ? "Aucun match disponible"
-                : "Aucun match trouvé"}
+              {matches.length === 0 ? "Aucun match disponible" : "Aucun match trouvé"}
             </h3>
             <p className="text-white/40 text-sm max-w-xs mx-auto">
               {matches.length === 0
@@ -390,12 +444,67 @@ export default function PredictionsPage() {
                   match={match}
                   prediction={predictions.get(match.id)}
                   userId={user!.uid}
+                  onAiGenerate={() => handleAiGenerateMatch(match)}
+                  aiGenerating={aiGeneratingMatchId === match.id}
                 />
               </motion.div>
             ))}
           </div>
         )}
       </div>
+
+      {/* Overwrite dialog */}
+      <AnimatePresence>
+        {overwriteDialog && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4"
+            onClick={() => setOverwriteDialog(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 24, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 24, scale: 0.97 }}
+              transition={{ duration: 0.2 }}
+              onClick={(e) => e.stopPropagation()}
+              className="glass rounded-2xl p-6 w-full max-w-sm border border-white/15"
+            >
+              <div className="flex items-start justify-between mb-1">
+                <p className="font-bold text-white">Pronostics existants</p>
+                <button onClick={() => setOverwriteDialog(null)} className="text-white/30 hover:text-white">
+                  <X size={16} />
+                </button>
+              </div>
+              <p className="text-white/50 text-sm mb-5">{overwriteDialog.message}</p>
+
+              <div className="flex flex-col gap-2">
+                {overwriteDialog.skipLabel && overwriteDialog.onSkip && (
+                  <button
+                    onClick={overwriteDialog.onSkip}
+                    className="w-full py-2.5 rounded-xl text-sm font-semibold bg-white/8 text-white hover:bg-white/12 transition-all border border-white/10"
+                  >
+                    {overwriteDialog.skipLabel}
+                  </button>
+                )}
+                <button
+                  onClick={overwriteDialog.onOverwrite}
+                  className="w-full py-2.5 rounded-xl text-sm font-semibold bg-purple-500/25 text-purple-300 hover:bg-purple-500/35 transition-all border border-purple-500/30"
+                >
+                  {overwriteDialog.skipLabel ? "Tout regénérer" : "Écraser et regénérer"}
+                </button>
+                <button
+                  onClick={() => setOverwriteDialog(null)}
+                  className="w-full py-2.5 rounded-xl text-sm font-semibold text-white/40 hover:text-white transition-all"
+                >
+                  Annuler
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
