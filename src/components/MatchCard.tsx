@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -46,6 +46,12 @@ export default function MatchCard({ match, prediction, userId, onSaved }: MatchC
     prediction?.predictedQualifiedTeamId ?? ""
   );
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setHomeVal(prediction?.predictedHomeScore != null ? String(prediction.predictedHomeScore) : "");
+    setAwayVal(prediction?.predictedAwayScore != null ? String(prediction.predictedAwayScore) : "");
+    setQualifiedId(prediction?.predictedQualifiedTeamId ?? "");
+  }, [prediction?.id, prediction?.predictedHomeScore, prediction?.predictedAwayScore, prediction?.predictedQualifiedTeamId]);
 
   async function handleSave() {
     const h = parseInt(homeVal);

@@ -93,11 +93,17 @@ ${JSON.stringify(matches)}`;
     }
 
     const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-    const text = (data.choices?.[0]?.message?.content ?? "")
-      .replace(/```json|```/g, "")
-      .trim();
+    const raw = data.choices?.[0]?.message?.content ?? "";
 
-    const results = JSON.parse(text) as PredictResult[];
+    // Extract the JSON array robustly — ignore any surrounding text/markdown
+    const jsonMatch = raw.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      return NextResponse.json(
+        { ok: false, error: `Réponse IA invalide : ${raw.slice(0, 200)}` },
+        { status: 502 }
+      );
+    }
+    const results = JSON.parse(jsonMatch[0]) as PredictResult[];
     return NextResponse.json({ ok: true, results });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Erreur inconnue";

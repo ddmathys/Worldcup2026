@@ -91,11 +91,12 @@ ${JSON.stringify(matches)}`;
   }
 
   const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-  const text = (data.choices?.[0]?.message?.content ?? "")
-    .replace(/```json|```/g, "")
-    .trim();
+  const raw = data.choices?.[0]?.message?.content ?? "";
 
-  return JSON.parse(text) as DeepSeekResult[];
+  const jsonMatch = raw.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) throw new Error(`Réponse IA invalide: ${raw.slice(0, 200)}`);
+
+  return JSON.parse(jsonMatch[0]) as DeepSeekResult[];
 }
 
 export async function POST(req: NextRequest) {
