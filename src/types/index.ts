@@ -37,6 +37,8 @@ export interface Prediction {
   predictedAwayScore: number | null;
   predictedQualifiedTeamId: string | null;
   pointsAwarded: number | null;
+  isAiGenerated: boolean;
+  aiMethod?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -52,6 +54,14 @@ export interface UserProfile {
   predictionsCount: number;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface AiPrediction {
+  homeScore: number;
+  awayScore: number;
+  method: string;
+  note: string;
+  generatedAt: Date;
 }
 
 export interface RankingEntry {

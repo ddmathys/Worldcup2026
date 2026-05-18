@@ -205,6 +205,8 @@ export async function getPrediction(
     predictedAwayScore: d.predictedAwayScore ?? null,
     predictedQualifiedTeamId: d.predictedQualifiedTeamId ?? null,
     pointsAwarded: d.pointsAwarded ?? null,
+    isAiGenerated: d.isAiGenerated ?? false,
+    aiMethod: d.aiMethod,
     createdAt: fromTimestamp(d.createdAt),
     updatedAt: fromTimestamp(d.updatedAt),
   };
@@ -227,6 +229,8 @@ export function subscribeUserPredictions(
           predictedAwayScore: data.predictedAwayScore ?? null,
           predictedQualifiedTeamId: data.predictedQualifiedTeamId ?? null,
           pointsAwarded: data.pointsAwarded ?? null,
+          isAiGenerated: data.isAiGenerated ?? false,
+          aiMethod: data.aiMethod,
           createdAt: fromTimestamp(data.createdAt),
           updatedAt: fromTimestamp(data.updatedAt),
         } as Prediction;
@@ -242,7 +246,9 @@ export async function savePrediction(
   lockAtUtc: Date,
   predictedHomeScore: number,
   predictedAwayScore: number,
-  predictedQualifiedTeamId: string | null
+  predictedQualifiedTeamId: string | null,
+  isAiGenerated = false,
+  aiMethod?: string
 ): Promise<void> {
   if (new Date() >= lockAtUtc) {
     throw new Error("Ce match est verrouillé — pronostic impossible.");
@@ -263,6 +269,8 @@ export async function savePrediction(
     predictedAwayScore,
     predictedQualifiedTeamId,
     pointsAwarded: null,
+    isAiGenerated,
+    ...(aiMethod ? { aiMethod } : {}),
     createdAt: isNew ? now : existing.data().createdAt,
     updatedAt: now,
   });
@@ -398,6 +406,23 @@ export async function fixPredictionsCounts(): Promise<number> {
   });
   await batch.commit();
   return predsSnap.docs.length;
+}
+
+// --- AI Predictions status ---
+export async function getAiPredictionStatus(): Promise<Map<string, number>> {
+  const snap = await getDocs(
+    query(collection(db, "matches"), where("phase", "==", "group"))
+  );
+  const status = new Map<string, number>();
+  snap.docs.forEach((d) => {
+    const data = d.data();
+    const g = data.groupCode as string;
+    if (g) {
+      if (!status.has(g)) status.set(g, 0);
+      if (data.aiPrediction) status.set(g, (status.get(g) ?? 0) + 1);
+    }
+  });
+  return status;
 }
 
 // --- Admin: get all users ---

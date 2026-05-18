@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import CountdownTimer from "@/components/CountdownTimer";
-import { Trophy, Users, CalendarDays, ChevronRight, Star, Zap } from "lucide-react";
+import { Trophy, Users, CalendarDays, ChevronRight, Star, Zap, Sparkles } from "lucide-react";
 
 const FIRST_MATCH = new Date("2026-06-11T20:00:00Z");
 
@@ -213,6 +213,50 @@ export default function HomePage() {
               </motion.div>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* ── AI Feature ───────────────────────── */}
+      <section className="py-20 px-4 border-t border-white/8">
+        <div className="max-w-5xl mx-auto">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="glass rounded-3xl p-8 sm:p-12 border border-purple-500/20 bg-purple-500/5 flex flex-col sm:flex-row items-center gap-8"
+          >
+            <div className="flex-shrink-0 w-20 h-20 rounded-2xl bg-purple-500/20 flex items-center justify-center">
+              <Sparkles size={36} className="text-purple-400" />
+            </div>
+            <div className="flex-1 text-center sm:text-left">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-500/15 border border-purple-500/25 text-purple-300 text-xs font-semibold mb-3">
+                <Sparkles size={11} />
+                Nouveau — Pronostics IA
+              </div>
+              <h2 className="text-2xl sm:text-3xl font-black text-white mb-2">
+                104 matchs à pronostiquer ?{" "}
+                <span className="text-purple-400">L'IA le fait pour toi.</span>
+              </h2>
+              <p className="text-white/50 text-sm sm:text-base mb-4 max-w-xl">
+                Sélectionne une poule, choisis une méthode (classement FIFA, cotes de paris, forme du moment…)
+                et l'IA génère tes pronostics en quelques secondes. Tu peux ensuite les modifier à ta guise.
+              </p>
+              <div className="flex flex-wrap gap-2 justify-center sm:justify-start">
+                {["IA libre", "Classement FIFA", "Cotes paris", "Forme actuelle", "Mode chaos"].map((m) => (
+                  <span key={m} className="px-2.5 py-1 rounded-lg bg-white/8 text-white/50 text-xs font-semibold border border-white/10">
+                    {m}
+                  </span>
+                ))}
+              </div>
+            </div>
+            {user && (
+              <Link href="/predictions" className="flex-shrink-0 btn-gold text-sm flex items-center gap-2">
+                <Sparkles size={15} />
+                Essayer
+                <ChevronRight size={14} />
+              </Link>
+            )}
+          </motion.div>
         </div>
       </section>
 

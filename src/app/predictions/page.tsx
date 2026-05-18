@@ -6,9 +6,10 @@ import { motion } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
 import Navigation from "@/components/Navigation";
 import MatchCard from "@/components/MatchCard";
-import { subscribeMatches, subscribeUserPredictions } from "@/lib/firestore";
+import { subscribeMatches, subscribeUserPredictions, savePrediction } from "@/lib/firestore";
 import type { Match, Prediction } from "@/types";
-import { Search, SlidersHorizontal, CalendarDays, Trophy, Loader2 } from "lucide-react";
+import toast from "react-hot-toast";
+import { Search, SlidersHorizontal, Loader2, Sparkles, Bot } from "lucide-react";
 import clsx from "clsx";
 
 type PhaseFilter = "all" | "group" | "knockout";
@@ -24,6 +25,8 @@ export default function PredictionsPage() {
   const [phaseFilter, setPhaseFilter] = useState<PhaseFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [groupFilter, setGroupFilter] = useState("all");
+  const [aiMethod, setAiMethod] = useState("ai");
+  const [aiGenerating, setAiGenerating] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) router.push("/login");
@@ -80,6 +83,90 @@ export default function PredictionsPage() {
 
   const total = matches.length;
   const filled = matches.filter((m) => predictions.has(m.id)).length;
+
+  async function handleAiGenerate() {
+    if (!user) return;
+    const groupMatches = matches.filter(
+      (m) => m.phase === "group" && (groupFilter === "all" || m.groupCode === groupFilter)
+    );
+    const openMatches = groupMatches.filter((m) => {
+      const s = computeStatus(m);
+      return s === "open" || s === "soon";
+    });
+    if (openMatches.length === 0) {
+      toast.error("Aucun match ouvert à pronostiquer dans ce groupe.");
+      return;
+    }
+
+    const alreadyPredicted = openMatches.filter((m) => predictions.has(m.id));
+    if (alreadyPredicted.length > 0) {
+      const confirmed = confirm(
+        `${alreadyPredicted.length} match(s) ont déjà un pronostic. Écraser et regénérer avec l'IA ?`
+      );
+      if (!confirmed) return;
+    }
+
+    // Group by groupCode for separate API calls
+    const byGroup = new Map<string, Match[]>();
+    for (const m of openMatches) {
+      const g = m.groupCode!;
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g)!.push(m);
+    }
+
+    setAiGenerating(true);
+    let saved = 0;
+    const errors: string[] = [];
+
+    for (const [groupCode, gMatches] of byGroup) {
+      try {
+        const res = await fetch("/api/ai/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            groupCode,
+            method: aiMethod,
+            matches: gMatches.map((m) => ({
+              id: m.id,
+              homeTeam: m.homeTeam.name,
+              awayTeam: m.awayTeam.name,
+            })),
+          }),
+        });
+        const json = await res.json() as {
+          ok: boolean;
+          results?: Array<{ id: string; homeScore: number; awayScore: number }>;
+          error?: string;
+        };
+        if (!json.ok || !json.results) throw new Error(json.error ?? "Erreur IA");
+
+        for (const r of json.results) {
+          const match = gMatches.find((m) => m.id === r.id);
+          if (!match) continue;
+          await savePrediction(
+            user.uid,
+            r.id,
+            match.lockAtUtc,
+            r.homeScore,
+            r.awayScore,
+            null,
+            true,
+            aiMethod
+          );
+          saved++;
+        }
+      } catch (e) {
+        errors.push(`Gr. ${groupCode}: ${e instanceof Error ? e.message : "erreur"}`);
+      }
+    }
+
+    setAiGenerating(false);
+    if (errors.length > 0) {
+      toast.error(errors.join(" · "));
+    } else {
+      toast.success(`${saved} pronostic${saved > 1 ? "s" : ""} IA enregistré${saved > 1 ? "s" : ""} !`);
+    }
+  }
 
   if (authLoading || (!user && !authLoading)) {
     return (
@@ -202,6 +289,71 @@ export default function PredictionsPage() {
             </div>
           )}
         </div>
+
+        {/* AI banner */}
+        {!loadingData && matches.filter(m => m.phase === "group").length > 0 && (
+          <div className="mb-6 glass rounded-2xl p-4 border border-purple-500/25 bg-purple-500/5">
+            <div className="flex items-start gap-3 mb-3">
+              <div className="w-8 h-8 rounded-xl bg-purple-500/20 flex items-center justify-center flex-shrink-0">
+                <Bot size={16} className="text-purple-400" />
+              </div>
+              <div>
+                <p className="font-bold text-white text-sm flex items-center gap-1.5">
+                  <Sparkles size={13} className="text-purple-400" />
+                  Pronostics assistés par IA
+                </p>
+                <p className="text-xs text-white/40 mt-0.5">
+                  {groupFilter !== "all"
+                    ? `Génère automatiquement les 6 pronostics du Groupe ${groupFilter}`
+                    : "Sélectionne un groupe pour générer ses pronostics en un clic"}
+                </p>
+              </div>
+            </div>
+
+            {/* Method pills */}
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {([
+                { key: "ai", label: "IA libre" },
+                { key: "fifa", label: "FIFA" },
+                { key: "betting", label: "Cotes" },
+                { key: "form", label: "Forme" },
+                { key: "chaos", label: "Chaos" },
+              ] as const).map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => setAiMethod(key)}
+                  className={clsx(
+                    "px-2.5 py-1 rounded-lg text-xs font-semibold transition-all",
+                    aiMethod === key
+                      ? "bg-purple-500/30 text-purple-300 border border-purple-500/40"
+                      : "bg-white/5 text-white/40 hover:text-white border border-white/10"
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={handleAiGenerate}
+              disabled={aiGenerating || groupFilter === "all"}
+              className={clsx(
+                "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all",
+                groupFilter !== "all"
+                  ? "bg-purple-500/25 text-purple-300 border border-purple-500/35 hover:bg-purple-500/35"
+                  : "bg-white/5 text-white/25 border border-white/10 cursor-default"
+              )}
+            >
+              {aiGenerating ? (
+                <><Loader2 size={14} className="animate-spin" />Génération en cours…</>
+              ) : groupFilter !== "all" ? (
+                <><Sparkles size={14} />Générer le Groupe {groupFilter}</>
+              ) : (
+                <><Sparkles size={14} />Sélectionne un groupe ci-dessus</>
+              )}
+            </button>
+          </div>
+        )}
 
         {/* Match list */}
         {loadingData ? (

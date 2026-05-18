@@ -4,7 +4,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
-import { Save, Lock, Clock, CheckCircle2, Star } from "lucide-react";
+import { Save, Lock, Clock, CheckCircle2, Star, Sparkles } from "lucide-react";
 import toast from "react-hot-toast";
 import { savePrediction } from "@/lib/firestore";
 import { getMaxPoints } from "@/lib/scoring";
@@ -98,7 +98,15 @@ export default function MatchCard({ match, prediction, userId, onSaved }: MatchC
           <Clock size={10} />
           <span>{format(match.kickoffUtc, "d MMM · HH:mm", { locale: fr })}</span>
         </div>
-        <StatusBadge status={status} />
+        <div className="flex items-center gap-1.5">
+          {prediction?.isAiGenerated && (
+            <span className="flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
+              <Sparkles size={8} />
+              IA
+            </span>
+          )}
+          <StatusBadge status={status} />
+        </div>
       </div>
 
       {/* Main row */}

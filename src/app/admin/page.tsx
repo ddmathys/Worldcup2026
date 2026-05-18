@@ -14,6 +14,7 @@ import {
   recalculateAllPoints,
   fixUserProfiles,
   fixPredictionsCounts,
+  getAiPredictionStatus,
 } from "@/lib/firestore";
 import { generateSampleMatches } from "@/lib/seed-data";
 import type { Match, UserProfile } from "@/types";
@@ -34,6 +35,9 @@ import {
   Wifi,
   Clock,
   ListChecks,
+  Sparkles,
+  CheckCircle2,
+  CircleDashed,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -65,7 +69,10 @@ export default function AdminPage() {
   const [resultInputs, setResultInputs] = useState<
     Record<string, { home: string; away: string; qualified: string }>
   >({});
-  const [activeTab, setActiveTab] = useState<"matches" | "users" | "api">("api");
+  const [activeTab, setActiveTab] = useState<"matches" | "users" | "api" | "ia">("api");
+  const [aiMethod, setAiMethod] = useState("ai");
+  const [aiStatus, setAiStatus] = useState<Map<string, number>>(new Map());
+  const [aiGenerating, setAiGenerating] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && (!user || profile?.role !== "admin")) {
@@ -82,6 +89,77 @@ export default function AdminPage() {
     getAllUsers().then(setUsers);
     return unsub;
   }, [user, profile]);
+
+  useEffect(() => {
+    if (activeTab === "ia" && user && profile?.role === "admin") {
+      loadAiStatus();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, user, profile]);
+
+  async function loadAiStatus() {
+    const status = await getAiPredictionStatus();
+    setAiStatus(status);
+  }
+
+  async function handleGenerateGroup(groupCode: string) {
+    const existing = aiStatus.get(groupCode) ?? 0;
+    let overwrite = false;
+    if (existing > 0) {
+      const confirmed = confirm(
+        `Le groupe ${groupCode} a déjà ${existing}/6 pronostics IA. Écraser et regénérer ?`
+      );
+      if (!confirmed) return;
+      overwrite = true;
+    }
+    setAiGenerating(groupCode);
+    try {
+      const res = await fetch("/api/ai/generate-predictions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "group", groupCode, method: aiMethod, overwrite }),
+      });
+      const json = await res.json() as { ok: boolean; generated: number; errors?: string[] };
+      if (!json.ok) throw new Error(json.errors?.join(", ") ?? "Erreur");
+      toast.success(`Groupe ${groupCode} : ${json.generated} pronostics générés`);
+      await loadAiStatus();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Erreur génération IA");
+    } finally {
+      setAiGenerating(null);
+    }
+  }
+
+  async function handleGenerateAll() {
+    const hasAny = Array.from(aiStatus.values()).some((v) => v > 0);
+    let overwrite = false;
+    if (hasAny) {
+      const confirmed = confirm(
+        "Certains groupes ont déjà des pronostics IA. Écraser tous et regénérer ?"
+      );
+      if (!confirmed) return;
+      overwrite = true;
+    }
+    setAiGenerating("all");
+    try {
+      const res = await fetch("/api/ai/generate-predictions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "all", method: aiMethod, overwrite }),
+      });
+      const json = await res.json() as { ok: boolean; generated: number; skipped: number; errors?: string[] };
+      if (json.errors && json.errors.length > 0) {
+        toast.error(`Erreurs : ${json.errors.join(", ")}`);
+      } else {
+        toast.success(`${json.generated} pronostics IA générés (${json.skipped} ignorés)`);
+      }
+      await loadAiStatus();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Erreur génération IA");
+    } finally {
+      setAiGenerating(null);
+    }
+  }
 
   async function handleSeedMatches() {
     if (!confirm("Charger les matchs de démonstration dans Firestore ?")) return;
@@ -282,6 +360,7 @@ export default function AdminPage() {
         <div className="flex gap-2 mb-6 flex-wrap">
           {([
             { key: "api", label: "Sync API", icon: Wifi },
+            { key: "ia", label: "IA Pronostics", icon: Sparkles },
             { key: "matches", label: "Matchs", icon: Trophy },
             { key: "users", label: "Participants", icon: Users },
           ] as const).map(({ key, label, icon: Icon }) => (
@@ -397,6 +476,131 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* IA tab */}
+        {activeTab === "ia" && (
+          <div className="space-y-6">
+            {/* Method selector */}
+            <div className="glass rounded-2xl p-5">
+              <h3 className="font-bold text-white mb-4 flex items-center gap-2">
+                <Sparkles size={16} className="text-yellow-400" />
+                Méthode de génération
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {([
+                  { key: "ai", label: "IA libre" },
+                  { key: "fifa", label: "Classement FIFA" },
+                  { key: "betting", label: "Cotes paris" },
+                  { key: "form", label: "Forme actuelle" },
+                  { key: "chaos", label: "Mode chaos" },
+                ] as const).map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => setAiMethod(key)}
+                    className={clsx(
+                      "px-4 py-2 rounded-xl text-sm font-semibold transition-all",
+                      aiMethod === key
+                        ? "bg-yellow-400/20 text-yellow-400 border border-yellow-400/30"
+                        : "glass text-white/50 hover:text-white border border-white/10"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Generate all */}
+            <button
+              onClick={handleGenerateAll}
+              disabled={aiGenerating !== null || matches.filter(m => m.phase === "group").length === 0}
+              className="w-full glass rounded-2xl p-4 flex items-center justify-between hover:bg-white/8 transition-all disabled:opacity-50 border border-yellow-400/20"
+            >
+              <div className="flex items-center gap-3">
+                <Sparkles size={20} className="text-yellow-400" />
+                <div className="text-left">
+                  <p className="font-bold text-white text-sm">Générer tous les groupes</p>
+                  <p className="text-xs text-white/40">12 appels IA séquentiels — 72 matchs</p>
+                </div>
+              </div>
+              {aiGenerating === "all" ? (
+                <Loader2 size={18} className="animate-spin text-yellow-400" />
+              ) : (
+                <span className="text-xs text-yellow-400 font-semibold bg-yellow-400/10 px-3 py-1 rounded-full border border-yellow-400/20">
+                  Lancer →
+                </span>
+              )}
+            </button>
+
+            {/* Per-group grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+              {["A","B","C","D","E","F","G","H","I","J","K","L"].map((group) => {
+                const count = aiStatus.get(group) ?? 0;
+                const done = count === 6;
+                const partial = count > 0 && count < 6;
+                const isGenerating = aiGenerating === group;
+
+                return (
+                  <div
+                    key={group}
+                    className={clsx(
+                      "glass rounded-2xl p-4 flex flex-col gap-3 border",
+                      done ? "border-emerald-500/30 bg-emerald-500/5" : "border-white/10"
+                    )}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-2xl font-black text-white">
+                        Gr. {group}
+                      </span>
+                      {done ? (
+                        <CheckCircle2 size={18} className="text-emerald-400" />
+                      ) : partial ? (
+                        <CircleDashed size={18} className="text-yellow-400" />
+                      ) : (
+                        <CircleDashed size={18} className="text-white/20" />
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      {Array.from({ length: 6 }).map((_, i) => (
+                        <div
+                          key={i}
+                          className={clsx(
+                            "h-1.5 flex-1 rounded-full",
+                            i < count ? "bg-yellow-400" : "bg-white/10"
+                          )}
+                        />
+                      ))}
+                    </div>
+                    <p className="text-xs text-white/40">{count}/6 pronostics IA</p>
+
+                    <button
+                      onClick={() => handleGenerateGroup(group)}
+                      disabled={aiGenerating !== null}
+                      className={clsx(
+                        "w-full py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-40",
+                        done
+                          ? "bg-white/8 text-white/60 hover:bg-white/12"
+                          : "bg-yellow-400/15 text-yellow-400 hover:bg-yellow-400/25 border border-yellow-400/20"
+                      )}
+                    >
+                      {isGenerating ? (
+                        <span className="flex items-center justify-center gap-1.5">
+                          <Loader2 size={12} className="animate-spin" />
+                          Génération…
+                        </span>
+                      ) : done ? (
+                        "Regénérer"
+                      ) : (
+                        "Générer"
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
