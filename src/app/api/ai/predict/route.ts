@@ -43,6 +43,51 @@ export interface PredictResult {
   note: string;
 }
 
+// Fallback: extract id/homeScore/awayScore via regex when JSON.parse fails
+function extractResultsFallback(raw: string, matches: PredictMatch[]): PredictResult[] {
+  const results: PredictResult[] = [];
+  for (const match of matches) {
+    // Find the block containing this match id
+    const idEscaped = match.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const blockRe = new RegExp(
+      `"id"\\s*:\\s*"${idEscaped}"[^}]*?"homeScore"\\s*:\\s*(\\d+)[^}]*?"awayScore"\\s*:\\s*(\\d+)`,
+      "s"
+    );
+    const altRe = new RegExp(
+      `"homeScore"\\s*:\\s*(\\d+)[^}]*?"awayScore"\\s*:\\s*(\\d+)[^}]*?"id"\\s*:\\s*"${idEscaped}"`,
+      "s"
+    );
+    const m = blockRe.exec(raw) ?? altRe.exec(raw);
+    if (m) {
+      results.push({
+        id: match.id,
+        homeScore: parseInt(m[1]),
+        awayScore: parseInt(m[2]),
+        note: "",
+      });
+    }
+  }
+  return results;
+}
+
+function parseAiResponse(raw: string, matches: PredictMatch[]): PredictResult[] {
+  // 1. Try to find and parse the JSON array directly
+  const arrayMatch = raw.match(/\[[\s\S]*\]/);
+  if (arrayMatch) {
+    try {
+      return JSON.parse(arrayMatch[0]) as PredictResult[];
+    } catch {
+      // JSON has issues (unescaped quotes in notes, etc.) — try fallback
+    }
+  }
+
+  // 2. Fallback: extract values per match via regex (note will be empty)
+  const fallback = extractResultsFallback(raw, matches);
+  if (fallback.length > 0) return fallback;
+
+  throw new Error(`Réponse IA non parseable : ${raw.slice(0, 150)}`);
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json() as {
@@ -65,8 +110,12 @@ export async function POST(req: NextRequest) {
     const prompt = `Tu es un expert football analysant la Coupe du Monde 2026, Groupe ${groupCode}.
 Méthode : "${m.label}". Instructions : ${m.prompt}
 
-Retourne UNIQUEMENT un tableau JSON valide, sans markdown ni explication :
-[{"id":"...","homeScore":N,"awayScore":N,"note":"max 8 mots en français"},…]
+Retourne UNIQUEMENT un tableau JSON valide. Règles strictes :
+- Pas de markdown, pas d'explication autour du JSON
+- Les notes ne doivent PAS contenir de guillemets (") ni de caractères spéciaux
+- Maximum 6 mots par note, en français simple
+
+Format : [{"id":"...","homeScore":N,"awayScore":N,"note":"..."},...]
 
 Matchs :
 ${JSON.stringify(matches)}`;
@@ -95,15 +144,7 @@ ${JSON.stringify(matches)}`;
     const data = await res.json() as { choices: Array<{ message: { content: string } }> };
     const raw = data.choices?.[0]?.message?.content ?? "";
 
-    // Extract the JSON array robustly — ignore any surrounding text/markdown
-    const jsonMatch = raw.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      return NextResponse.json(
-        { ok: false, error: `Réponse IA invalide : ${raw.slice(0, 200)}` },
-        { status: 502 }
-      );
-    }
-    const results = JSON.parse(jsonMatch[0]) as PredictResult[];
+    const results = parseAiResponse(raw, matches);
     return NextResponse.json({ ok: true, results });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Erreur inconnue";

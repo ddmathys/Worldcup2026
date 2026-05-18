@@ -54,6 +54,26 @@ interface DeepSeekResult {
   note: string;
 }
 
+function extractResultsFallback(raw: string, matches: MatchInput[]): DeepSeekResult[] {
+  const results: DeepSeekResult[] = [];
+  for (const match of matches) {
+    const idEscaped = match.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const blockRe = new RegExp(
+      `"id"\\s*:\\s*"${idEscaped}"[^}]*?"homeScore"\\s*:\\s*(\\d+)[^}]*?"awayScore"\\s*:\\s*(\\d+)`,
+      "s"
+    );
+    const altRe = new RegExp(
+      `"homeScore"\\s*:\\s*(\\d+)[^}]*?"awayScore"\\s*:\\s*(\\d+)[^}]*?"id"\\s*:\\s*"${idEscaped}"`,
+      "s"
+    );
+    const m = blockRe.exec(raw) ?? altRe.exec(raw);
+    if (m) {
+      results.push({ id: match.id, homeScore: parseInt(m[1]), awayScore: parseInt(m[2]), note: "" });
+    }
+  }
+  return results;
+}
+
 async function callDeepSeek(
   matches: MatchInput[],
   group: string,
@@ -66,8 +86,12 @@ async function callDeepSeek(
   const prompt = `Tu es un expert football analysant la Coupe du Monde 2026, Groupe ${group}.
 Méthode : "${method.label}". Instructions : ${method.prompt}
 
-Retourne UNIQUEMENT un tableau JSON valide, sans markdown ni explication :
-[{"id":"...","homeScore":N,"awayScore":N,"note":"max 8 mots en français"},…]
+Retourne UNIQUEMENT un tableau JSON valide. Règles strictes :
+- Pas de markdown, pas d'explication autour du JSON
+- Les notes ne doivent PAS contenir de guillemets (") ni de caractères spéciaux
+- Maximum 6 mots par note, en français simple
+
+Format : [{"id":"...","homeScore":N,"awayScore":N,"note":"..."},...]
 
 Matchs :
 ${JSON.stringify(matches)}`;
@@ -93,10 +117,19 @@ ${JSON.stringify(matches)}`;
   const data = await res.json() as { choices: Array<{ message: { content: string } }> };
   const raw = data.choices?.[0]?.message?.content ?? "";
 
-  const jsonMatch = raw.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) throw new Error(`Réponse IA invalide: ${raw.slice(0, 200)}`);
+  const arrayMatch = raw.match(/\[[\s\S]*\]/);
+  if (arrayMatch) {
+    try {
+      return JSON.parse(arrayMatch[0]) as DeepSeekResult[];
+    } catch {
+      // fall through to regex fallback
+    }
+  }
 
-  return JSON.parse(jsonMatch[0]) as DeepSeekResult[];
+  const fallback = extractResultsFallback(raw, matches);
+  if (fallback.length > 0) return fallback;
+
+  throw new Error(`Réponse IA invalide: ${raw.slice(0, 150)}`);
 }
 
 export async function POST(req: NextRequest) {
