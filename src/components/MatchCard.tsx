@@ -13,6 +13,14 @@ import StatusBadge from "./StatusBadge";
 import FlagImage from "./FlagImage";
 import clsx from "clsx";
 
+const AI_METHOD_LABELS: Record<string, string> = {
+  ai: "IA libre",
+  fifa: "FIFA",
+  betting: "Cotes",
+  form: "Forme",
+  chaos: "Chaos",
+};
+
 interface MatchCardProps {
   match: Match;
   prediction?: Prediction;
@@ -110,7 +118,7 @@ export default function MatchCard({ match, prediction, userId, onSaved, onAiGene
           {prediction?.isAiGenerated && (
             <span className="flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
               <Sparkles size={8} />
-              IA
+              {AI_METHOD_LABELS[prediction.aiMethod ?? "ai"] ?? "IA"}
             </span>
           )}
           <StatusBadge status={status} />
