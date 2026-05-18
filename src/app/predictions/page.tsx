@@ -19,27 +19,27 @@ const AI_METHODS = [
   {
     key: "ai",
     label: "IA libre",
-    description: "Meilleur jugement analytique global : classement FIFA, forme récente, contexte historique et conditions du tournoi.",
+    description: "L'IA combine toutes les sources disponibles — classement FIFA, forme récente, historique des confrontations, dynamique de groupe et conditions du tournoi — pour produire le pronostic le plus équilibré et analytiquement solide possible. C'est le mode recommandé si tu veux des prédictions réalistes et argumentées.",
   },
   {
     key: "fifa",
     label: "Classement FIFA",
-    description: "Pondéré strictement par le classement FIFA avril 2026. Les favoris gagnent plus souvent, les écarts reflètent la qualité.",
+    description: "Les pronostics sont pondérés strictement selon le classement FIFA d'avril 2026. Plus l'écart de classement est grand, plus le favori gagne nettement. Les équipes bien classées (France #1, Espagne #2, Argentine #3…) dominent. Peu d'upsets, résultats logiques et prévisibles.",
   },
   {
     key: "betting",
     label: "Cotes paris",
-    description: "Simule les cotes bookmaker : 55% de chance pour le favori, 25% de nul, 20% d'upset.",
+    description: "L'IA simule le raisonnement des bookmakers : environ 55% de chance de victoire pour le favori, 25% de match nul, 20% d'upset. Les cotes reflètent l'opinion collective du marché, intégrant blessures, suspensions et momentum récent. Idéal pour des pronostics proches de ce que parieraient les professionnels.",
   },
   {
     key: "form",
     label: "Forme actuelle",
-    description: "Basé sur les performances 2025-2026. La forme récente et le momentum pré-tournoi priment sur la réputation.",
+    description: "Seules les performances de 2025-2026 comptent : résultats en qualifications, Nations League, matchs amicaux récents et blessures en cours. Une équipe historiquement forte mais en méforme sera pénalisée. À l'inverse, une équipe en feu peut créer la surprise. Le momentum pré-tournoi prime sur la réputation.",
   },
   {
     key: "chaos",
     label: "Mode chaos",
-    description: "Upsets encouragés, scores improbables mais réalistes. Attendez-vous à des résultats surprenants !",
+    description: "L'IA est instructée de favoriser les résultats surprenants : upsets fréquents, scores élevés, nuls inattendus. Les outsiders gagnent plus souvent que la logique ne le voudrait. Parfait si tu veux te démarquer du peloton avec des pronostics audacieux — ou si tu penses que la Coupe du Monde 2026 réserve des surprises !",
   },
 ] as const;
 
