@@ -38,7 +38,13 @@ import {
   Sparkles,
   CheckCircle2,
   CircleDashed,
+  Mail,
+  Send,
+  Eye,
+  Pencil,
 } from "lucide-react";
+import type { NewsletterSection } from "@/lib/newsletter-template";
+import { buildNewsletterHtml } from "@/lib/newsletter-template";
 import clsx from "clsx";
 
 async function callSyncAPI(type: "matches" | "scores") {
@@ -69,10 +75,25 @@ export default function AdminPage() {
   const [resultInputs, setResultInputs] = useState<
     Record<string, { home: string; away: string; qualified: string }>
   >({});
-  const [activeTab, setActiveTab] = useState<"matches" | "users" | "api" | "ia">("api");
+  const [activeTab, setActiveTab] = useState<"matches" | "users" | "api" | "ia" | "newsletter">("api");
   const [aiMethod, setAiMethod] = useState("ai");
   const [aiStatus, setAiStatus] = useState<Map<string, number>>(new Map());
   const [aiGenerating, setAiGenerating] = useState<string | null>(null);
+
+  // Newsletter state
+  interface NewsletterDraft {
+    subject: string;
+    preheader: string;
+    sections: NewsletterSection[];
+    matchesToday: { home: string; away: string; time: string; group: string }[];
+    matchesTomorrow: { home: string; away: string; time: string; group: string }[];
+    dateStr: string;
+  }
+  const [nlDraft, setNlDraft] = useState<NewsletterDraft | null>(null);
+  const [nlGenerating, setNlGenerating] = useState(false);
+  const [nlSending, setNlSending] = useState(false);
+  const [nlSentCount, setNlSentCount] = useState<number | null>(null);
+  const [nlPreviewMode, setNlPreviewMode] = useState<"edit" | "preview">("edit");
 
   useEffect(() => {
     if (!authLoading && (!user || profile?.role !== "admin")) {
@@ -245,6 +266,44 @@ export default function AdminPage() {
     toast.success(`Match ${newStatus === "open" ? "ouvert" : "verrouillé"}`);
   }
 
+  async function handleGenerateNewsletter() {
+    setNlGenerating(true);
+    setNlSentCount(null);
+    try {
+      const res = await fetch("/api/ai/generate-newsletter");
+      const json = await res.json() as NewsletterDraft & { ok: boolean; error?: string };
+      if (!json.ok) throw new Error(json.error ?? "Erreur IA");
+      setNlDraft(json);
+      setNlPreviewMode("edit");
+      toast.success("Newsletter générée !");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Erreur génération");
+    } finally {
+      setNlGenerating(false);
+    }
+  }
+
+  async function handleSendNewsletter() {
+    if (!nlDraft) return;
+    if (!confirm(`Envoyer cette newsletter à ${users.length} participants ?`)) return;
+    setNlSending(true);
+    try {
+      const res = await fetch("/api/newsletter/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nlDraft),
+      });
+      const json = await res.json() as { ok: boolean; sent: number; error?: string };
+      if (!json.ok) throw new Error(json.error ?? "Erreur envoi");
+      setNlSentCount(json.sent);
+      toast.success(`Newsletter envoyée à ${json.sent} participants !`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Erreur envoi");
+    } finally {
+      setNlSending(false);
+    }
+  }
+
   if (authLoading || !profile) {
     return (
       <div className="min-h-screen bg-navy flex items-center justify-center">
@@ -361,6 +420,7 @@ export default function AdminPage() {
           {([
             { key: "api", label: "Sync API", icon: Wifi },
             { key: "ia", label: "IA Pronostics", icon: Sparkles },
+            { key: "newsletter", label: "Newsletter", icon: Mail },
             { key: "matches", label: "Matchs", icon: Trophy },
             { key: "users", label: "Participants", icon: Users },
           ] as const).map(({ key, label, icon: Icon }) => (
@@ -605,6 +665,161 @@ export default function AdminPage() {
           </div>
         )}
 
+        {/* Newsletter tab */}
+        {activeTab === "newsletter" && (
+          <div className="space-y-5">
+            {/* Info banner */}
+            <div className="glass rounded-2xl p-4 border border-blue-500/20 bg-blue-500/5 flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-blue-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <Mail size={16} className="text-blue-400" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-white">Newsletter quotidienne IA</p>
+                <p className="text-xs text-white/40 mt-0.5">
+                  DeepSeek génère une story sur les matchs du jour / lendemain · Envoyée via Resend à tous les participants
+                </p>
+              </div>
+            </div>
+
+            {/* Generate button */}
+            <button
+              onClick={handleGenerateNewsletter}
+              disabled={nlGenerating}
+              className="w-full glass rounded-2xl p-5 flex items-center justify-between hover:bg-white/8 transition-all disabled:opacity-50 border border-purple-500/25"
+            >
+              <div className="flex items-center gap-3">
+                <Sparkles size={20} className="text-purple-400" />
+                <div className="text-left">
+                  <p className="font-bold text-white text-sm">Générer avec l'IA</p>
+                  <p className="text-xs text-white/40">
+                    Analyse les matchs du jour / demain et rédige une newsletter engageante
+                  </p>
+                </div>
+              </div>
+              {nlGenerating ? (
+                <Loader2 size={18} className="animate-spin text-purple-400" />
+              ) : (
+                <span className="text-xs text-purple-400 font-semibold bg-purple-500/15 px-3 py-1 rounded-full border border-purple-500/25">
+                  Générer →
+                </span>
+              )}
+            </button>
+
+            {/* Draft editor */}
+            {nlDraft && (
+              <div className="glass rounded-2xl overflow-hidden border border-white/10">
+                {/* Draft header */}
+                <div className="flex items-center justify-between px-5 py-4 border-b border-white/8">
+                  <p className="font-bold text-white text-sm flex items-center gap-2">
+                    <Mail size={15} className="text-blue-400" />
+                    Brouillon généré
+                  </p>
+                  <div className="flex items-center gap-1.5 bg-white/5 rounded-lg p-1">
+                    <button
+                      onClick={() => setNlPreviewMode("edit")}
+                      className={clsx(
+                        "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all",
+                        nlPreviewMode === "edit" ? "bg-white/12 text-white" : "text-white/40 hover:text-white"
+                      )}
+                    >
+                      <Pencil size={11} /> Éditer
+                    </button>
+                    <button
+                      onClick={() => setNlPreviewMode("preview")}
+                      className={clsx(
+                        "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all",
+                        nlPreviewMode === "preview" ? "bg-white/12 text-white" : "text-white/40 hover:text-white"
+                      )}
+                    >
+                      <Eye size={11} /> Aperçu
+                    </button>
+                  </div>
+                </div>
+
+                {nlPreviewMode === "edit" ? (
+                  <div className="p-5 space-y-4">
+                    {/* Subject */}
+                    <div>
+                      <label className="text-xs font-semibold text-white/50 uppercase tracking-wider block mb-2">
+                        Sujet de l'email
+                      </label>
+                      <input
+                        type="text"
+                        value={nlDraft.subject}
+                        onChange={(e) => setNlDraft({ ...nlDraft, subject: e.target.value })}
+                        className="input-field text-sm"
+                      />
+                    </div>
+
+                    {/* Sections */}
+                    {nlDraft.sections.map((section, i) => (
+                      <div key={i} className="bg-white/5 rounded-xl p-4 space-y-3 border border-white/8">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">{section.emoji}</span>
+                          <input
+                            type="text"
+                            value={section.title}
+                            onChange={(e) => {
+                              const sections = [...nlDraft.sections];
+                              sections[i] = { ...sections[i], title: e.target.value };
+                              setNlDraft({ ...nlDraft, sections });
+                            }}
+                            className="input-field text-sm font-semibold flex-1"
+                            placeholder="Titre de la section"
+                          />
+                        </div>
+                        <textarea
+                          value={section.content}
+                          onChange={(e) => {
+                            const sections = [...nlDraft.sections];
+                            sections[i] = { ...sections[i], content: e.target.value };
+                            setNlDraft({ ...nlDraft, sections });
+                          }}
+                          rows={6}
+                          className="input-field text-sm w-full resize-y font-mono leading-relaxed"
+                          placeholder="Contenu de la section…"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  /* Preview iframe */
+                  <div className="p-4">
+                    <PreviewIframe draft={nlDraft} />
+                  </div>
+                )}
+
+                {/* Send footer */}
+                <div className="flex items-center justify-between px-5 py-4 border-t border-white/8 bg-white/3">
+                  <div>
+                    {nlSentCount !== null ? (
+                      <p className="text-xs text-emerald-400 font-semibold flex items-center gap-1.5">
+                        <CheckCircle2 size={13} />
+                        Envoyée à {nlSentCount} participants
+                      </p>
+                    ) : (
+                      <p className="text-xs text-white/30">{users.length} destinataires</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleSendNewsletter}
+                    disabled={nlSending || nlSentCount !== null}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 border border-blue-500/30 disabled:opacity-50"
+                  >
+                    {nlSending ? (
+                      <><Loader2 size={14} className="animate-spin" />Envoi en cours…</>
+                    ) : nlSentCount !== null ? (
+                      <><CheckCircle2 size={14} />Envoyée !</>
+                    ) : (
+                      <><Send size={14} />Envoyer à tous</>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Matches tab */}
         {activeTab === "matches" && (
           <div className="space-y-2">
@@ -808,5 +1023,34 @@ export default function AdminPage() {
         )}
       </div>
     </div>
+  );
+}
+
+// Preview iframe renders the newsletter HTML in isolation (safe, no XSS bleed)
+function PreviewIframe({
+  draft,
+}: {
+  draft: {
+    subject: string;
+    preheader: string;
+    sections: NewsletterSection[];
+    matchesToday: { home: string; away: string; time: string; group: string }[];
+    matchesTomorrow: { home: string; away: string; time: string; group: string }[];
+    dateStr: string;
+  };
+}) {
+  const html = buildNewsletterHtml({
+    ...draft,
+    appUrl: typeof window !== "undefined" ? window.location.origin : "",
+  });
+
+  return (
+    <iframe
+      srcDoc={html}
+      title="Aperçu newsletter"
+      className="w-full rounded-xl border border-white/10"
+      style={{ height: "600px", background: "#0f172a" }}
+      sandbox="allow-same-origin"
+    />
   );
 }
