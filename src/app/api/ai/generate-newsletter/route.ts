@@ -1,31 +1,13 @@
 import { NextResponse } from "next/server";
 import { getDocs, collection, query, orderBy } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import type { NewsletterSection } from "@/lib/newsletter-template";
+import type { NewsletterDraft, MatchRow } from "@/lib/newsletter-template";
 import { format, isToday, isTomorrow } from "date-fns";
 import { fr } from "date-fns/locale";
 
 const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
 
-interface MatchRow {
-  home: string;
-  away: string;
-  group: string;
-  time: string;
-  phase: string;
-}
-
-interface DeepSeekResponse {
-  subject: string;
-  preheader: string;
-  sections: NewsletterSection[];
-}
-
-function buildPrompt(
-  today: MatchRow[],
-  tomorrow: MatchRow[],
-  dateStr: string
-): string {
+function buildPrompt(today: MatchRow[], tomorrow: MatchRow[], dateStr: string): string {
   const todayStr =
     today.length > 0
       ? today.map((m) => `  - ${m.home} vs ${m.away} (Groupe ${m.group}, ${m.time})`).join("\n")
@@ -36,7 +18,28 @@ function buildPrompt(
       ? tomorrow.map((m) => `  - ${m.home} vs ${m.away} (Groupe ${m.group}, ${m.time})`).join("\n")
       : "  Aucun match demain.";
 
-  return `Tu es un journaliste sportif passionné et expert en football, qui rédige la newsletter quotidienne de la Coupe du Monde 2026 pour une communauté de fans français.
+  const focusMatches =
+    today.length > 0 ? today : tomorrow.length > 0 ? tomorrow : null;
+
+  const focusInstruction = focusMatches
+    ? `
+MATCHES À TRAITER EN PRIORITÉ (${today.length > 0 ? "aujourd'hui" : "demain"}) :
+${focusMatches.map((m) => `  · ${m.home} vs ${m.away} (Groupe ${m.group})`).join("\n")}
+
+Pour chaque match, construis le récit autour de :
+1. CE QUI EST EN JEU — la situation dans le groupe, les scénarios de qualification, la pression sur chaque équipe
+2. LE RÉCIT DE CE TOURNOI — comment ces équipes sont arrivées là, leur forme récente, leurs blessures, leur moral
+3. LA BATAILLE TACTIQUE — le système de jeu, le duel clé dans l'entrejeu ou en défense, ce qui peut faire basculer le match
+4. L'HISTOIRE ENTRE CES NATIONS — confrontations passées en Coupe du Monde, rivalité historique, ce que ce match représente culturellement
+`
+    : `
+Aucun match aujourd'hui ni demain. Rédige un grand article sur la Coupe du Monde 2026 :
+- Une histoire forte sur le tournoi lui-même (édition inédite à 48 équipes, 3 pays hôtes, nouveaux stades)
+- Ou un bilan de la phase de poules jusqu'ici (surprises, déceptions, révélations)
+- Ou le portrait d'une équipe ou d'un joueur qui marque ce tournoi
+`;
+
+  return `Tu es rédacteur en chef d'une newsletter football de référence, style L'Équipe magazine ou The Athletic. Tu écris pour des fans passionnés de foot qui veulent de l'analyse et du récit, pas des anecdotes de quiz.
 
 Date : ${dateStr}
 
@@ -46,25 +49,43 @@ ${todayStr}
 Matchs de demain :
 ${tomorrowStr}
 
-Génère une newsletter engageante, chaleureuse et informative en français. Règles :
-- Ton passionné, accessible, dynamique — comme si tu parlais à des amis fans de foot
-- Si des matchs ont lieu aujourd'hui : mets les enjeux, ce qui est en jeu dans les groupes
-- La veille des matchs : raconte une anecdote marquante ou un fait surprenant sur les équipes concernées
-- Sans matchs : une histoire captivante sur le tournoi (record, fait historique, pays hôte, star attendue…)
-- 2 sections maximum, chacune avec un contenu de 2-3 paragraphes
-- Les emojis doivent être simples (⚽🔥💡🏆🌍)
+${focusInstruction}
+
+RÈGLES D'ÉCRITURE ABSOLUES :
+- Jamais de listes à puces dans le contenu des articles — du RÉCIT pur, des phrases complètes
+- Chaque paragraphe doit apporter une information ou une analyse concrète
+- Les chiffres et statistiques sont les bienvenus s'ils éclairent le propos (% possession, buts encaissés, classement FIFA, nb d'Coupes du Monde remportées…)
+- Le pullQuote doit être une phrase choc ou révélatrice — pas une généralité
+- Le keyPlayer doit être décrit avec précision : son rôle tactique exact dans CE match
+- Le statOfDay doit être un vrai chiffre intéressant lié au contexte (pas inventé)
+- Langue : français impeccable, ton passionné mais rigoureux
+- Maximum 2 articles
 
 Réponds UNIQUEMENT avec ce JSON valide (sans markdown, sans texte autour) :
 {
-  "subject": "sujet de l'email (max 60 caractères, en français, avec emoji)",
-  "preheader": "texte de prévisualisation court (max 100 caractères)",
-  "sections": [
+  "subject": "Objet de l'email en français, percutant, max 60 caractères, avec emoji",
+  "preheader": "Sous-titre court, max 90 caractères",
+  "headline": "Grand titre éditorial de cette édition, narratif et fort (max 70 chars)",
+  "intro": "2-3 phrases d'introduction qui posent l'enjeu et donnent envie de lire. Ton éditorial.",
+  "articles": [
     {
-      "title": "titre de la section",
-      "emoji": "emoji unique",
-      "content": "contenu en texte brut, paragraphes séparés par \\n\\n"
+      "tag": "À LA UNE",
+      "matchTitle": "Équipe A · Équipe B (ou null si pas lié à un match)",
+      "title": "Titre de l'article, narratif, accrocheur",
+      "content": "Corps de l'article — minimum 5 paragraphes séparés par \\n\\n. Récit, analyse tactique, contexte historique, enjeux de qualification. Pas de puces.",
+      "pullQuote": "Une seule phrase forte ou choc extraite du contenu",
+      "keyPlayer": {
+        "name": "Prénom Nom",
+        "team": "Pays de l'équipe",
+        "role": "Description précise de son rôle tactique dans ce match spécifique (2-3 phrases)"
+      }
     }
-  ]
+  ],
+  "statOfDay": {
+    "number": "chiffre ou nombre",
+    "unit": "unité optionnelle (ans, buts, matchs…)",
+    "label": "Explication du chiffre en contexte WC2026 (1-2 phrases)"
+  }
 }`;
 }
 
@@ -74,7 +95,6 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: "DEEPSEEK_API_KEY non configurée" }, { status: 500 });
   }
 
-  // Fetch all matches from Firestore
   const snap = await getDocs(
     query(collection(db, "matches"), orderBy("kickoffUtc", "asc"))
   );
@@ -88,9 +108,8 @@ export async function GET() {
     const row: MatchRow = {
       home: (data.homeTeam as { name: string })?.name ?? "?",
       away: (data.awayTeam as { name: string })?.name ?? "?",
-      group: (data.groupCode as string) ?? data.phase,
+      group: (data.groupCode as string) ?? (data.phase as string),
       time: format(kickoff, "HH:mm"),
-      phase: data.phase as string,
     };
     if (isToday(kickoff)) today.push(row);
     else if (isTomorrow(kickoff)) tomorrow.push(row);
@@ -107,7 +126,7 @@ export async function GET() {
     },
     body: JSON.stringify({
       model: "deepseek-chat",
-      max_tokens: 2000,
+      max_tokens: 4000,
       response_format: { type: "json_object" },
       messages: [{ role: "user", content: prompt }],
     }),
@@ -115,24 +134,25 @@ export async function GET() {
 
   if (!res.ok) {
     const text = await res.text();
-    return NextResponse.json({ ok: false, error: `DeepSeek ${res.status}: ${text.slice(0, 200)}` }, { status: 502 });
+    return NextResponse.json(
+      { ok: false, error: `DeepSeek ${res.status}: ${text.slice(0, 300)}` },
+      { status: 502 }
+    );
   }
 
   const data = await res.json() as { choices: Array<{ message: { content: string } }> };
   const raw = data.choices?.[0]?.message?.content ?? "{}";
 
-  let newsletter: DeepSeekResponse;
+  let newsletter: Omit<NewsletterDraft, "matchesToday" | "matchesTomorrow" | "dateStr">;
   try {
-    newsletter = JSON.parse(raw) as DeepSeekResponse;
+    newsletter = JSON.parse(raw) as typeof newsletter;
   } catch {
     return NextResponse.json({ ok: false, error: "Réponse IA invalide", raw }, { status: 502 });
   }
 
   return NextResponse.json({
     ok: true,
-    subject: newsletter.subject,
-    preheader: newsletter.preheader,
-    sections: newsletter.sections,
+    ...newsletter,
     matchesToday: today,
     matchesTomorrow: tomorrow,
     dateStr,

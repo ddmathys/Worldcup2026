@@ -43,8 +43,8 @@ import {
   Eye,
   Pencil,
 } from "lucide-react";
-import type { NewsletterSection } from "@/lib/newsletter-template";
 import { buildNewsletterHtml } from "@/lib/newsletter-template";
+import type { NewsletterDraft as NLDraft } from "@/lib/newsletter-template";
 import clsx from "clsx";
 
 async function callSyncAPI(type: "matches" | "scores") {
@@ -80,16 +80,7 @@ export default function AdminPage() {
   const [aiStatus, setAiStatus] = useState<Map<string, number>>(new Map());
   const [aiGenerating, setAiGenerating] = useState<string | null>(null);
 
-  // Newsletter state
-  interface NewsletterDraft {
-    subject: string;
-    preheader: string;
-    sections: NewsletterSection[];
-    matchesToday: { home: string; away: string; time: string; group: string }[];
-    matchesTomorrow: { home: string; away: string; time: string; group: string }[];
-    dateStr: string;
-  }
-  const [nlDraft, setNlDraft] = useState<NewsletterDraft | null>(null);
+  const [nlDraft, setNlDraft] = useState<NLDraft | null>(null);
   const [nlGenerating, setNlGenerating] = useState(false);
   const [nlSending, setNlSending] = useState(false);
   const [nlSentCount, setNlSentCount] = useState<number | null>(null);
@@ -271,7 +262,7 @@ export default function AdminPage() {
     setNlSentCount(null);
     try {
       const res = await fetch("/api/ai/generate-newsletter");
-      const json = await res.json() as NewsletterDraft & { ok: boolean; error?: string };
+      const json = await res.json() as NLDraft & { ok: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? "Erreur IA");
       setNlDraft(json);
       setNlPreviewMode("edit");
@@ -737,53 +728,86 @@ export default function AdminPage() {
                 </div>
 
                 {nlPreviewMode === "edit" ? (
-                  <div className="p-5 space-y-4">
-                    {/* Subject */}
-                    <div>
-                      <label className="text-xs font-semibold text-white/50 uppercase tracking-wider block mb-2">
-                        Sujet de l'email
-                      </label>
-                      <input
-                        type="text"
-                        value={nlDraft.subject}
-                        onChange={(e) => setNlDraft({ ...nlDraft, subject: e.target.value })}
-                        className="input-field text-sm"
-                      />
+                  <div className="p-5 space-y-5">
+                    {/* Subject + Headline */}
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-semibold text-white/40 uppercase tracking-wider block mb-1.5">Sujet de l'email</label>
+                        <input type="text" value={nlDraft.subject} onChange={(e) => setNlDraft({ ...nlDraft, subject: e.target.value })} className="input-field text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-white/40 uppercase tracking-wider block mb-1.5">Titre hero</label>
+                        <input type="text" value={nlDraft.headline} onChange={(e) => setNlDraft({ ...nlDraft, headline: e.target.value })} className="input-field text-sm font-bold" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-white/40 uppercase tracking-wider block mb-1.5">Intro éditoriale</label>
+                        <textarea value={nlDraft.intro} onChange={(e) => setNlDraft({ ...nlDraft, intro: e.target.value })} rows={3} className="input-field text-sm w-full resize-none" />
+                      </div>
                     </div>
 
-                    {/* Sections */}
-                    {nlDraft.sections.map((section, i) => (
-                      <div key={i} className="bg-white/5 rounded-xl p-4 space-y-3 border border-white/8">
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">{section.emoji}</span>
-                          <input
-                            type="text"
-                            value={section.title}
-                            onChange={(e) => {
-                              const sections = [...nlDraft.sections];
-                              sections[i] = { ...sections[i], title: e.target.value };
-                              setNlDraft({ ...nlDraft, sections });
-                            }}
-                            className="input-field text-sm font-semibold flex-1"
-                            placeholder="Titre de la section"
-                          />
+                    {/* Articles */}
+                    {nlDraft.articles.map((article, i) => (
+                      <div key={i} className="bg-white/4 rounded-2xl p-4 space-y-3 border border-white/8">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-xs font-bold text-yellow-400 uppercase tracking-widest">{article.tag}</span>
+                          {article.matchTitle && <span className="text-xs text-white/30">· {article.matchTitle}</span>}
                         </div>
-                        <textarea
-                          value={section.content}
-                          onChange={(e) => {
-                            const sections = [...nlDraft.sections];
-                            sections[i] = { ...sections[i], content: e.target.value };
-                            setNlDraft({ ...nlDraft, sections });
-                          }}
-                          rows={6}
-                          className="input-field text-sm w-full resize-y font-mono leading-relaxed"
-                          placeholder="Contenu de la section…"
-                        />
+                        <div>
+                          <label className="text-xs text-white/30 block mb-1">Titre de l'article</label>
+                          <input type="text" value={article.title}
+                            onChange={(e) => { const a = [...nlDraft.articles]; a[i] = { ...a[i], title: e.target.value }; setNlDraft({ ...nlDraft, articles: a }); }}
+                            className="input-field text-sm font-semibold w-full" />
+                        </div>
+                        <div>
+                          <label className="text-xs text-white/30 block mb-1">Corps de l'article (paragraphes séparés par ligne vide)</label>
+                          <textarea value={article.content}
+                            onChange={(e) => { const a = [...nlDraft.articles]; a[i] = { ...a[i], content: e.target.value }; setNlDraft({ ...nlDraft, articles: a }); }}
+                            rows={10} className="input-field text-sm w-full resize-y font-mono leading-relaxed" />
+                        </div>
+                        <div>
+                          <label className="text-xs text-white/30 block mb-1">Citation forte (pull quote)</label>
+                          <input type="text" value={article.pullQuote}
+                            onChange={(e) => { const a = [...nlDraft.articles]; a[i] = { ...a[i], pullQuote: e.target.value }; setNlDraft({ ...nlDraft, articles: a }); }}
+                            className="input-field text-sm italic w-full" />
+                        </div>
+                        {article.keyPlayer && (
+                          <div className="bg-white/4 rounded-xl p-3 border border-purple-500/20 space-y-2">
+                            <p className="text-xs font-bold text-purple-400 uppercase tracking-wider">⚡ Joueur à surveiller</p>
+                            <div className="flex gap-2">
+                              <input type="text" value={article.keyPlayer.name} placeholder="Nom"
+                                onChange={(e) => { const a = [...nlDraft.articles]; a[i] = { ...a[i], keyPlayer: { ...a[i].keyPlayer!, name: e.target.value } }; setNlDraft({ ...nlDraft, articles: a }); }}
+                                className="input-field text-sm font-bold flex-1" />
+                              <input type="text" value={article.keyPlayer.team} placeholder="Pays"
+                                onChange={(e) => { const a = [...nlDraft.articles]; a[i] = { ...a[i], keyPlayer: { ...a[i].keyPlayer!, team: e.target.value } }; setNlDraft({ ...nlDraft, articles: a }); }}
+                                className="input-field text-sm w-32" />
+                            </div>
+                            <textarea value={article.keyPlayer.role} rows={2} placeholder="Rôle tactique dans ce match…"
+                              onChange={(e) => { const a = [...nlDraft.articles]; a[i] = { ...a[i], keyPlayer: { ...a[i].keyPlayer!, role: e.target.value } }; setNlDraft({ ...nlDraft, articles: a }); }}
+                              className="input-field text-sm w-full resize-none" />
+                          </div>
+                        )}
                       </div>
                     ))}
+
+                    {/* Stat of day */}
+                    {nlDraft.statOfDay && (
+                      <div className="bg-white/4 rounded-2xl p-4 border border-amber-500/20 space-y-3">
+                        <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">Le chiffre du jour</p>
+                        <div className="flex gap-2">
+                          <input type="text" value={nlDraft.statOfDay.number} placeholder="Chiffre"
+                            onChange={(e) => setNlDraft({ ...nlDraft, statOfDay: { ...nlDraft.statOfDay!, number: e.target.value } })}
+                            className="input-field text-2xl font-black w-28 text-center text-yellow-400" />
+                          <input type="text" value={nlDraft.statOfDay.unit ?? ""} placeholder="Unité (optionnel)"
+                            onChange={(e) => setNlDraft({ ...nlDraft, statOfDay: { ...nlDraft.statOfDay!, unit: e.target.value } })}
+                            className="input-field text-sm w-32" />
+                        </div>
+                        <input type="text" value={nlDraft.statOfDay.label} placeholder="Description du chiffre"
+                          onChange={(e) => setNlDraft({ ...nlDraft, statOfDay: { ...nlDraft.statOfDay!, label: e.target.value } })}
+                          className="input-field text-sm w-full" />
+                      </div>
+                    )}
                   </div>
                 ) : (
-                  /* Preview iframe */
                   <div className="p-4">
                     <PreviewIframe draft={nlDraft} />
                   </div>
@@ -1027,22 +1051,11 @@ export default function AdminPage() {
 }
 
 // Preview iframe renders the newsletter HTML in isolation (safe, no XSS bleed)
-function PreviewIframe({
-  draft,
-}: {
-  draft: {
-    subject: string;
-    preheader: string;
-    sections: NewsletterSection[];
-    matchesToday: { home: string; away: string; time: string; group: string }[];
-    matchesTomorrow: { home: string; away: string; time: string; group: string }[];
-    dateStr: string;
-  };
-}) {
-  const html = buildNewsletterHtml({
-    ...draft,
-    appUrl: typeof window !== "undefined" ? window.location.origin : "",
-  });
+function PreviewIframe({ draft }: { draft: NLDraft }) {
+  const html = buildNewsletterHtml(
+    draft,
+    typeof window !== "undefined" ? window.location.origin : ""
+  );
 
   return (
     <iframe
