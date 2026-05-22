@@ -9,7 +9,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { getAllUsers } from "@/lib/firestore";
-import { resend } from "@/lib/resend";
+import { getResend } from "@/lib/resend";
 import { buildReminderEmail } from "@/lib/email-templates";
 
 // Days before the first match that trigger a milestone email to all users.
@@ -99,7 +99,7 @@ export async function GET(request: Request) {
     });
 
     try {
-      await resend.emails.send({ from: fromAddress, to: user.email, subject, html });
+      await getResend().emails.send({ from: fromAddress, to: user.email, subject, html });
       sent++;
     } catch (err) {
       errors.push(`${user.email}: ${err}`);
