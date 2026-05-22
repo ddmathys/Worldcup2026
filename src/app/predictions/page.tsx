@@ -62,6 +62,7 @@ export default function PredictionsPage() {
   const [phaseFilter, setPhaseFilter] = useState<PhaseFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [groupFilter, setGroupFilter] = useState("all");
+  const [pendingOnly, setPendingOnly] = useState(false);
   const [aiMethod, setAiMethod] = useState<AiMethodKey>("ai");
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiGeneratingMatchId, setAiGeneratingMatchId] = useState<string | null>(null);
@@ -97,7 +98,10 @@ export default function PredictionsPage() {
     new Set(matches.filter((m) => m.groupCode).map((m) => m.groupCode!))
   ).sort();
 
+  const pendingCount = matches.filter((m) => !predictions.has(m.id)).length;
+
   const filtered = matches.filter((m) => {
+    if (pendingOnly && predictions.has(m.id)) return false;
     if (phaseFilter === "group" && m.phase !== "group") return false;
     if (phaseFilter === "knockout" && m.phase === "group") return false;
     if (statusFilter !== "all") {
@@ -326,6 +330,27 @@ export default function PredictionsPage() {
                 </button>
               ))}
             </div>
+
+            <button
+              onClick={() => setPendingOnly((v) => !v)}
+              className={clsx(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all border",
+                pendingOnly
+                  ? "bg-orange-500/20 text-orange-400 border-orange-500/40"
+                  : "bg-white/5 text-white/50 hover:text-white border-white/10"
+              )}
+            >
+              <span>⏳</span>
+              Non votés
+              {pendingCount > 0 && (
+                <span className={clsx(
+                  "ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none",
+                  pendingOnly ? "bg-orange-500/30 text-orange-300" : "bg-white/10 text-white/50"
+                )}>
+                  {pendingCount}
+                </span>
+              )}
+            </button>
           </div>
 
           {groups.length > 0 && (
@@ -421,13 +446,21 @@ export default function PredictionsPage() {
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-24">
-            <div className="text-5xl mb-4">{matches.length === 0 ? "📅" : "🔍"}</div>
+            <div className="text-5xl mb-4">
+              {matches.length === 0 ? "📅" : pendingOnly ? "🎉" : "🔍"}
+            </div>
             <h3 className="text-lg font-bold text-white mb-2">
-              {matches.length === 0 ? "Aucun match disponible" : "Aucun match trouvé"}
+              {matches.length === 0
+                ? "Aucun match disponible"
+                : pendingOnly
+                ? "Tous tes pronostics sont faits !"
+                : "Aucun match trouvé"}
             </h3>
             <p className="text-white/40 text-sm max-w-xs mx-auto">
               {matches.length === 0
                 ? "Les matchs seront bientôt chargés par l'administrateur."
+                : pendingOnly
+                ? "Tu as pronostiqué tous les matchs dans cette sélection. Bravo !"
                 : "Essaie de modifier tes filtres."}
             </p>
           </div>
