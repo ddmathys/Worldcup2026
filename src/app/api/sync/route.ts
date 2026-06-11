@@ -1,19 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
-import { syncMatchesWC2026, syncScoresWC2026 } from "@/lib/api-providers";
-import { recalculateAllPoints } from "@/lib/firestore";
+import {
+  syncMatchesWC2026, syncScoresWC2026,
+  syncMatchesApiFootball, syncScoresApiFootball,
+} from "@/lib/api-providers";
+import { recalculateAllPointsAdmin } from "@/lib/firestore-admin";
 
 export async function POST(request: NextRequest) {
   try {
     const { type } = await request.json() as { type: string };
 
     if (type === "matches") {
-      const result = await syncMatchesWC2026();
+      let result;
+      try {
+        result = await syncMatchesWC2026();
+      } catch {
+        result = await syncMatchesApiFootball();
+      }
       return NextResponse.json({ ok: true, ...result });
     }
 
     if (type === "scores") {
-      const result = await syncScoresWC2026();
-      await recalculateAllPoints();
+      let result;
+      try {
+        result = await syncScoresWC2026();
+      } catch {
+        result = await syncScoresApiFootball();
+      }
+      await recalculateAllPointsAdmin();
       return NextResponse.json({ ok: true, ...result });
     }
 

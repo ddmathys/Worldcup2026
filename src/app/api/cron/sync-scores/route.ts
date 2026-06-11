@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { syncScoresWC2026 } from "@/lib/api-providers";
-import { recalculateAllPoints } from "@/lib/firestore";
-import { getDocs, collection } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { syncScoresWC2026, syncScoresApiFootball } from "@/lib/api-providers";
+import { recalculateAllPointsAdmin } from "@/lib/firestore-admin";
+import { getAdminAuth } from "@/lib/firebase-admin";
+import { getFirestore } from "firebase-admin/firestore";
+import { getApps } from "firebase-admin/app";
 
 // Called by Vercel Cron every 30 min.
 // Only syncs if a match kicked off ≥ 3h30 ago and is not yet marked finished,
@@ -19,7 +20,9 @@ export async function GET(request: Request) {
   const now = Date.now();
   const SYNC_DELAY = 3.5 * 3600_000; // 3h30 after kickoff
 
-  const snap = await getDocs(collection(db, "matches"));
+  getAdminAuth();
+  const adminDb = getFirestore(getApps()[0]);
+  const snap = await adminDb.collection("matches").get();
   const needsUpdate = snap.docs.some((d) => {
     const data = d.data();
     if (data.isFinished) return false;
@@ -32,7 +35,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: true, skipped: true, reason: "no match in update window" });
   }
 
-  const result = await syncScoresWC2026();
-  await recalculateAllPoints();
+  let result;
+  try {
+    result = await syncScoresWC2026();
+  } catch {
+    result = await syncScoresApiFootball();
+  }
+  await recalculateAllPointsAdmin();
   return NextResponse.json({ ok: true, ...result });
 }

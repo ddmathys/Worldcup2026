@@ -1,15 +1,13 @@
-import {
-  collection,
-  doc,
-  getDocs,
-  setDoc,
-  updateDoc,
-  writeBatch,
-  Timestamp,
-} from "firebase/firestore";
-import { db } from "./firebase";
+import { getFirestore, Timestamp } from "firebase-admin/firestore";
+import { getAdminAuth } from "./firebase-admin";
+import { getApps } from "firebase-admin/app";
 import { WC2026_TEAMS } from "./seed-data";
 import type { Match, Team } from "@/types";
+
+function getAdminDb() {
+  getAdminAuth();
+  return getFirestore(getApps()[0]);
+}
 
 // ─── Team name → internal ID ───────────────────────────────────────────────
 const TEAM_NAME_MAP: Record<string, string> = {
@@ -121,14 +119,61 @@ async function fetchApiFootball(path: string): Promise<ApiFootballResponse> {
 }
 
 // ─── Firestore helpers ──────────────────────────────────────────────────────
-async function getExistingMatchIndex(): Promise<Map<string, string>> {
-  const snap = await getDocs(collection(db, "matches"));
-  const map = new Map<string, string>();
+// Les matchs seedés n'ont pas d'apiMatchId : on indexe aussi par paire
+// d'équipes (ordre ignoré) + phase pour les rattacher au lieu de les dupliquer.
+function teamPairKey(phase: string, teamA: string, teamB: string): string {
+  return `${phase}|${[teamA, teamB].sort().join("_")}`;
+}
+
+function normalizeGroupCode(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const m = raw.match(/([A-L])\s*$/i);
+  return m ? m[1].toUpperCase() : null;
+}
+
+interface MatchIndex {
+  byApiId: Map<string, string>;
+  byTeams: Map<string, string>;
+}
+
+async function getExistingMatchIndex(): Promise<MatchIndex> {
+  const adminDb = getAdminDb();
+  const snap = await adminDb.collection("matches").get();
+  const byApiId = new Map<string, string>();
+  const byTeams = new Map<string, string>();
   snap.docs.forEach((d) => {
-    const id = d.data().apiMatchId;
-    if (id) map.set(String(id), d.id);
+    const data = d.data();
+    if (data.apiMatchId) byApiId.set(String(data.apiMatchId), d.id);
+    if (data.phase && data.homeTeamId && data.awayTeamId) {
+      byTeams.set(teamPairKey(data.phase, data.homeTeamId, data.awayTeamId), d.id);
+    }
   });
-  return map;
+  return { byApiId, byTeams };
+}
+
+function findExistingDoc(
+  index: MatchIndex,
+  apiMatchId: string,
+  phase: string,
+  homeId: string,
+  awayId: string
+): string | undefined {
+  const byId = index.byApiId.get(apiMatchId);
+  if (byId) return byId;
+  const key = teamPairKey(phase, homeId, awayId);
+  const docId = index.byTeams.get(key);
+  if (docId) index.byTeams.delete(key);
+  return docId;
+}
+
+// Champs à ne pas écraser sur un doc existant quand l'API ne les fournit pas,
+// ou qu'ils sont gérés côté app (qualifiedTeamId).
+function pruneForUpdate(data: Record<string, unknown>): Record<string, unknown> {
+  if (!data.stadiumName) delete data.stadiumName;
+  if (!data.city) delete data.city;
+  if (data.groupCode == null) delete data.groupCode;
+  delete data.qualifiedTeamId;
+  return data;
 }
 
 function buildMatchDoc(
@@ -155,7 +200,7 @@ function buildMatchDoc(
     stadiumName: stadium,
     city,
     kickoffUtc: Timestamp.fromDate(kickoffUtc),
-    lockAtUtc: Timestamp.fromDate(new Date(kickoffUtc.getTime() - 2 * 3600_000)),
+    lockAtUtc: Timestamp.fromDate(new Date(kickoffUtc.getTime() - 1 * 3600_000)),
     status,
     homeScore,
     awayScore,
@@ -170,8 +215,9 @@ export async function syncMatchesWC2026(): Promise<{ synced: number; errors: num
   const raw = await fetchWC2026("/matches");
   const list: WC2026Match[] = Array.isArray(raw) ? raw : (raw as { matches: WC2026Match[] }).matches ?? [];
 
+  const adminDb = getAdminDb();
   const index = await getExistingMatchIndex();
-  const batch = writeBatch(db);
+  const batch = adminDb.batch();
   let synced = 0, errors = 0;
 
   for (const m of list) {
@@ -179,20 +225,21 @@ export async function syncMatchesWC2026(): Promise<{ synced: number; errors: num
       const home = teamByName(m.home_team);
       const away = teamByName(m.away_team);
       const kickoff = new Date(m.kickoff_utc);
+      const phase = mapPhase(m.round);
       const data = buildMatchDoc(
         home, away, kickoff,
-        mapPhase(m.round),
-        m.group_name ?? null,
+        phase,
+        normalizeGroupCode(m.group_name),
         m.stadium ?? "", m.city ?? "",
         mapStatus(m.status),
         m.home_score ?? null, m.away_score ?? null,
         String(m.id)
       );
-      const existing = index.get(String(m.id));
+      const existing = findExistingDoc(index, String(m.id), phase, home.id, away.id);
       if (existing) {
-        batch.update(doc(db, "matches", existing), data);
+        batch.update(adminDb.collection("matches").doc(existing), pruneForUpdate(data));
       } else {
-        batch.set(doc(collection(db, "matches")), data);
+        batch.set(adminDb.collection("matches").doc(), data);
       }
       synced++;
     } catch { errors++; }
@@ -205,15 +252,18 @@ export async function syncScoresWC2026(): Promise<{ updated: number; provider: s
   const raw = await fetchWC2026("/matches");
   const list: WC2026Match[] = Array.isArray(raw) ? raw : (raw as { matches: WC2026Match[] }).matches ?? [];
 
+  const adminDb = getAdminDb();
   const index = await getExistingMatchIndex();
-  const batch = writeBatch(db);
+  const batch = adminDb.batch();
   let updated = 0;
 
   for (const m of list) {
     if (m.status !== "live" && m.status !== "finished") continue;
-    const docId = index.get(String(m.id));
+    // Scores : matching par apiMatchId uniquement — le fallback par équipes
+    // risquerait d'inverser home/away. La sync "matches" pose l'apiMatchId.
+    const docId = index.byApiId.get(String(m.id));
     if (!docId) continue;
-    batch.update(doc(db, "matches", docId), {
+    batch.update(adminDb.collection("matches").doc(docId), {
       homeScore: m.home_score ?? null,
       awayScore: m.away_score ?? null,
       status: mapStatus(m.status),
@@ -227,8 +277,9 @@ export async function syncScoresWC2026(): Promise<{ updated: number; provider: s
 
 export async function syncMatchesApiFootball(): Promise<{ synced: number; errors: number; provider: string }> {
   const data = await fetchApiFootball("/fixtures?league=1&season=2026");
+  const adminDb = getAdminDb();
   const index = await getExistingMatchIndex();
-  const batch = writeBatch(db);
+  const batch = adminDb.batch();
   let synced = 0, errors = 0;
 
   for (const f of data.response) {
@@ -236,20 +287,21 @@ export async function syncMatchesApiFootball(): Promise<{ synced: number; errors
       const home = teamByName(f.teams.home.name);
       const away = teamByName(f.teams.away.name);
       const kickoff = new Date(f.fixture.date);
+      const phase = mapPhase(f.league.round);
       const data2 = buildMatchDoc(
         home, away, kickoff,
-        mapPhase(f.league.round),
+        phase,
         extractGroup(f.league.round),
         f.venue?.name ?? "", f.venue?.city ?? "",
         mapStatus(f.fixture.status.short),
         f.goals.home, f.goals.away,
         String(f.fixture.id)
       );
-      const existing = index.get(String(f.fixture.id));
+      const existing = findExistingDoc(index, String(f.fixture.id), phase, home.id, away.id);
       if (existing) {
-        batch.update(doc(db, "matches", existing), data2);
+        batch.update(adminDb.collection("matches").doc(existing), pruneForUpdate(data2));
       } else {
-        batch.set(doc(collection(db, "matches")), data2);
+        batch.set(adminDb.collection("matches").doc(), data2);
       }
       synced++;
     } catch { errors++; }
@@ -260,15 +312,16 @@ export async function syncMatchesApiFootball(): Promise<{ synced: number; errors
 
 export async function syncScoresApiFootball(): Promise<{ updated: number; provider: string }> {
   const data = await fetchApiFootball("/fixtures?league=1&season=2026&live=all");
+  const adminDb = getAdminDb();
   const index = await getExistingMatchIndex();
-  const batch = writeBatch(db);
+  const batch = adminDb.batch();
   let updated = 0;
 
   for (const f of data.response) {
-    const docId = index.get(String(f.fixture.id));
+    const docId = index.byApiId.get(String(f.fixture.id));
     if (!docId) continue;
     const status = mapStatus(f.fixture.status.short);
-    batch.update(doc(db, "matches", docId), {
+    batch.update(adminDb.collection("matches").doc(docId), {
       homeScore: f.goals.home,
       awayScore: f.goals.away,
       status,
