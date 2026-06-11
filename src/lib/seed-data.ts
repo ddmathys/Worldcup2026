@@ -103,7 +103,7 @@ export function generateSampleMatches(): Omit<import("@/types").Match, "id">[] {
           gi * 24 * 3600 * 1000 + // décaler chaque groupe d'un jour
           kickoffOffsets[pi]
         );
-        const lockAt = new Date(kickoff.getTime() - 2 * 3600 * 1000);
+        const lockAt = new Date(kickoff.getTime() - 1 * 3600 * 1000);
 
         matches.push({
           phase: "group",

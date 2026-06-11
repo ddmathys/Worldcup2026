@@ -18,9 +18,30 @@ const fadeUp = {
 };
 
 const SCORING_RULES = [
-  { phase: "Phase de poules", exact: "3 pts", winner: "1 pt", icon: "⚽" },
-  { phase: "Phases finales", exact: "6 pts", winner: "2 pts", icon: "🏆" },
-  { phase: "Finale", exact: "12 pts", winner: "3 pts", icon: "👑" },
+  {
+    phase: "Phase de poules",
+    exact: "3 pts",
+    winner: "1 pt",
+    winnerLabel: "Bon résultat",
+    winnerNote: "vainqueur correct, ou nul prédit + vrai nul",
+    icon: "⚽",
+  },
+  {
+    phase: "Phases finales",
+    exact: "6 pts",
+    winner: "2 pts",
+    winnerLabel: "Bon qualifié",
+    winnerNote: null,
+    icon: "🏆",
+  },
+  {
+    phase: "Finale",
+    exact: "12 pts",
+    winner: "3 pts",
+    winnerLabel: "Bon qualifié",
+    winnerNote: null,
+    icon: "👑",
+  },
 ];
 
 export default function HomePage() {
@@ -246,8 +267,13 @@ export default function HomePage() {
                     <span className="font-black text-gold text-lg">{rule.exact}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-white/50">Bon vainqueur</span>
-                    <span className="font-bold text-emerald-400">{rule.winner}</span>
+                    <span className="text-sm text-white/50 flex flex-col items-start gap-0.5">
+                      {rule.winnerLabel}
+                      {rule.winnerNote && (
+                        <span className="text-[10px] text-white/30 leading-tight">{rule.winnerNote}</span>
+                      )}
+                    </span>
+                    <span className="font-bold text-emerald-400 ml-3 shrink-0">{rule.winner}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-white/50">Mauvais pronostic</span>
@@ -286,7 +312,7 @@ export default function HomePage() {
               {
                 icon: "🔒",
                 title: "Verrouillage auto",
-                desc: "Les pronostics se verrouillent 2h avant chaque match.",
+                desc: "Les pronostics se verrouillent 1h avant chaque match.",
               },
               {
                 icon: "🏆",

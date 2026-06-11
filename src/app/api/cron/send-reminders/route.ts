@@ -74,7 +74,7 @@ export async function GET(request: Request) {
 
   const users = await getAllUsers();
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "https://worldcup2026friend.com").replace(/\/$/, "");
-  const fromAddress = process.env.RESEND_FROM_EMAIL ?? "WC2026 <noreply@worldcup2026friend.com>";
+  const fromAddress = process.env.RESEND_FROM_EMAIL ?? "WC2026 <noreply@mymeeto.com>";
 
   let sent = 0;
   let skipped = 0;

@@ -70,13 +70,21 @@ export default function MatchCard({ match, prediction, userId, onSaved, onAiGene
       toast.error("Score invalide");
       return;
     }
-    if (isKnockout && h === a && !qualifiedId) {
-      toast.error("Choisissez l'équipe qualifiée");
-      return;
+    let finalQualifiedId: string | null = null;
+    if (isKnockout) {
+      if (h !== a) {
+        finalQualifiedId = h > a ? match.homeTeam.id : match.awayTeam.id;
+      } else {
+        if (!qualifiedId) {
+          toast.error("Choisissez l'équipe qualifiée en cas de nul");
+          return;
+        }
+        finalQualifiedId = qualifiedId;
+      }
     }
     setSaving(true);
     try {
-      await savePrediction(userId, match.id, match.lockAtUtc, h, a, isKnockout ? (qualifiedId || null) : null);
+      await savePrediction(userId, match.id, match.lockAtUtc, h, a, finalQualifiedId);
       toast.success("Pronostic enregistré !");
       onSaved?.();
     } catch (e: unknown) {
@@ -138,10 +146,19 @@ export default function MatchCard({ match, prediction, userId, onSaved, onAiGene
         {/* Score area */}
         <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
           {status === "finished" && match.homeScore !== null ? (
-            <div className="flex items-center gap-1.5">
-              <span className="text-2xl font-black text-white w-7 text-center">{match.homeScore}</span>
-              <span className="text-white/25 font-bold text-sm">–</span>
-              <span className="text-2xl font-black text-white w-7 text-center">{match.awayScore}</span>
+            <div className="flex flex-col items-center gap-1">
+              {hasPrediction && (
+                <div className="flex items-center gap-1">
+                  <span className="text-xs font-bold text-white/40 w-5 text-center">{prediction!.predictedHomeScore}</span>
+                  <span className="text-white/20 text-[10px]">–</span>
+                  <span className="text-xs font-bold text-white/40 w-5 text-center">{prediction!.predictedAwayScore}</span>
+                </div>
+              )}
+              <div className="flex items-center gap-1.5">
+                <span className="text-2xl font-black text-white w-7 text-center">{match.homeScore}</span>
+                <span className="text-white/25 font-bold text-sm">–</span>
+                <span className="text-2xl font-black text-white w-7 text-center">{match.awayScore}</span>
+              </div>
             </div>
           ) : (
             <div className="flex items-center gap-1.5">

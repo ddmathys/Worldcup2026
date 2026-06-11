@@ -2,12 +2,114 @@ import { NextResponse } from "next/server";
 import { getDocs, collection, query, orderBy } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import type { NewsletterDraft, MatchRow } from "@/lib/newsletter-template";
-import { format, isToday, isTomorrow } from "date-fns";
+import { format, isToday, isTomorrow, subDays, isAfter } from "date-fns";
 import { fr } from "date-fns/locale";
+import type { QueryDocumentSnapshot, DocumentData } from "firebase/firestore";
 
 const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
 
-function buildPrompt(today: MatchRow[], tomorrow: MatchRow[], dateStr: string): string {
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface GroupContext {
+  group: string;
+  teams: string[];
+}
+
+interface FinishedMatch {
+  home: string;
+  away: string;
+  homeScore: number;
+  awayScore: number;
+  group: string;
+  date: string; // "lundi 26 mai"
+}
+
+// ─── Helpers Firebase ────────────────────────────────────────────────────────
+
+function buildGroupContext(docs: QueryDocumentSnapshot<DocumentData>[]): GroupContext[] {
+  const map = new Map<string, Set<string>>();
+  for (const d of docs) {
+    const data = d.data() as Record<string, unknown>;
+    const g = (data.groupCode as string) ?? null;
+    if (!g) continue;
+    const home = (data.homeTeam as { name: string })?.name;
+    const away = (data.awayTeam as { name: string })?.name;
+    if (!map.has(g)) map.set(g, new Set());
+    if (home) map.get(g)!.add(home);
+    if (away) map.get(g)!.add(away);
+  }
+  return Array.from(map.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([group, teams]) => ({ group, teams: Array.from(teams).sort() }));
+}
+
+/**
+ * Matchs terminés dans les 4 derniers jours — ce sont les seuls résultats
+ * que l'IA est autorisée à commenter.
+ */
+function extractRecentResults(
+  docs: QueryDocumentSnapshot<DocumentData>[]
+): FinishedMatch[] {
+  const cutoff = subDays(new Date(), 4);
+  return docs
+    .filter((d) => {
+      const data = d.data() as Record<string, unknown>;
+      if (!data.isFinished) return false;
+      const kickoff: Date = (data.kickoffUtc as { toDate: () => Date })?.toDate?.() ?? new Date(0);
+      return isAfter(kickoff, cutoff);
+    })
+    .map((d) => {
+      const data = d.data() as Record<string, unknown>;
+      const kickoff: Date = (data.kickoffUtc as { toDate: () => Date })?.toDate?.() ?? new Date();
+      return {
+        home: (data.homeTeam as { name: string })?.name ?? "?",
+        away: (data.awayTeam as { name: string })?.name ?? "?",
+        homeScore: (data.homeScore as number) ?? 0,
+        awayScore: (data.awayScore as number) ?? 0,
+        group: (data.groupCode as string) ?? (data.phase as string) ?? "?",
+        date: format(kickoff, "EEEE d MMMM", { locale: fr }),
+      };
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// ─── System prompt ───────────────────────────────────────────────────────────
+
+function buildSystemPrompt(groups: GroupContext[], hasResults: boolean): string {
+  const groupLines = groups
+    .map((g) => `  - Groupe ${g.group} : ${g.teams.join(", ")}`)
+    .join("\n");
+
+  const resultsWarning = hasResults
+    ? `⚠️ RÉSULTATS : Tu as accès aux résultats réels ci-dessous. N'utilise QUE ces scores — ne les modifie pas, ne les invente pas.`
+    : `⚠️ AUCUN MATCH N'A ENCORE ÉTÉ JOUÉ. Il est STRICTEMENT INTERDIT d'inventer des scores, des résultats ou des classements de groupe. Tout article doit être en mode "avant-match" (preview, enjeux, analyse tactique, histoire entre les nations). Si tu inventes un score, ta réponse sera rejetée.`;
+
+  return `Tu es un journaliste football expert, reconnu pour la rigueur factuelle de tes analyses. Tu travailles pour une newsletter lue par des passionnés de foot qui détectent immédiatement les erreurs factuelles.
+
+COUPE DU MONDE 2026 — GROUPES OFFICIELS (tirage du 5 décembre 2025) :
+${groupLines}
+
+${resultsWarning}
+
+RÈGLES DE VÉRIFICATION — à respecter impérativement :
+1. Classement FIFA d'avril 2026 : France #1, Espagne #2, Argentine #3, Angleterre #4, Portugal #5, Brésil #6, Pays-Bas #7, Maroc #8, Belgique #9, Allemagne #10.
+2. Statistiques historiques : ne cite que des chiffres vérifiables (palmarès FIFA officiel, records avérés). Si tu doutes d'un chiffre, reformule sans lui.
+3. Joueurs : ne mentionne que des joueurs réellement convoqués dans leur sélection pour ce Mondial.
+4. Confrontations historiques : uniquement des matchs réellement joués entre ces nations.
+5. Format 2026 : 48 équipes, 12 groupes de 4, hôtes USA/Canada/Mexique, 104 matchs.
+6. NE JAMAIS inventer de résultats, scores ou classements de groupe qui ne t'ont pas été fournis.
+
+STYLE : L'Équipe magazine ou The Athletic. Récit narratif, analyse tactique, enjeux humains. Phrases complètes, jamais de puces. Français rigoureux.`;
+}
+
+// ─── User prompt ─────────────────────────────────────────────────────────────
+
+function buildUserPrompt(
+  today: MatchRow[],
+  tomorrow: MatchRow[],
+  recentResults: FinishedMatch[],
+  dateStr: string
+): string {
   const todayStr =
     today.length > 0
       ? today.map((m) => `  - ${m.home} vs ${m.away} (Groupe ${m.group}, ${m.time})`).join("\n")
@@ -18,86 +120,115 @@ function buildPrompt(today: MatchRow[], tomorrow: MatchRow[], dateStr: string): 
       ? tomorrow.map((m) => `  - ${m.home} vs ${m.away} (Groupe ${m.group}, ${m.time})`).join("\n")
       : "  Aucun match demain.";
 
-  const focusMatches =
-    today.length > 0 ? today : tomorrow.length > 0 ? tomorrow : null;
+  // ── Bloc résultats réels ──────────────────────────────────────────────────
+  const resultsBlock =
+    recentResults.length > 0
+      ? `\nRÉSULTATS RÉELS DES DERNIERS MATCHS (seuls scores que tu peux citer) :
+${recentResults
+  .map(
+    (m) =>
+      `  - ${m.date} · Groupe ${m.group} : ${m.home} ${m.homeScore}-${m.awayScore} ${m.away}`
+  )
+  .join("\n")}
+`
+      : `\n🚫 AUCUN RÉSULTAT DISPONIBLE. Le tournoi n'a pas encore commencé ou aucun match récent n'est terminé. Rédige UNIQUEMENT en mode preview/avant-match. Interdiction absolue d'inventer des scores.\n`;
 
-  const focusInstruction = focusMatches
-    ? `
-MATCHES À TRAITER EN PRIORITÉ (${today.length > 0 ? "aujourd'hui" : "demain"}) :
+  // ── Instruction centrale ──────────────────────────────────────────────────
+  const focusMatches = today.length > 0 ? today : tomorrow.length > 0 ? tomorrow : null;
+
+  let focusInstruction: string;
+
+  if (focusMatches) {
+    focusInstruction = `
+MATCHES À ANALYSER EN PRIORITÉ (${today.length > 0 ? "aujourd'hui" : "demain"}) :
 ${focusMatches.map((m) => `  · ${m.home} vs ${m.away} (Groupe ${m.group})`).join("\n")}
 
-Pour chaque match, construis le récit autour de :
-1. CE QUI EST EN JEU — la situation dans le groupe, les scénarios de qualification, la pression sur chaque équipe
-2. LE RÉCIT DE CE TOURNOI — comment ces équipes sont arrivées là, leur forme récente, leurs blessures, leur moral
-3. LA BATAILLE TACTIQUE — le système de jeu, le duel clé dans l'entrejeu ou en défense, ce qui peut faire basculer le match
-4. L'HISTOIRE ENTRE CES NATIONS — confrontations passées en Coupe du Monde, rivalité historique, ce que ce match représente culturellement
-`
-    : `
-Aucun match aujourd'hui ni demain. Rédige un grand article sur la Coupe du Monde 2026 :
-- Une histoire forte sur le tournoi lui-même (édition inédite à 48 équipes, 3 pays hôtes, nouveaux stades)
-- Ou un bilan de la phase de poules jusqu'ici (surprises, déceptions, révélations)
-- Ou le portrait d'une équipe ou d'un joueur qui marque ce tournoi
-`;
+Pour chaque match, construis ton article autour de :
+1. CE QUI EST EN JEU — situation du groupe, scénarios de qualification (basés sur les résultats fournis ou "groupe encore ouvert" si aucun résultat)
+2. LE RÉCIT DU TOURNOI — comment ces équipes sont arrivées là, leur forme, leurs forces
+3. LA BATAILLE TACTIQUE — systèmes de jeu, duel clé, ce qui peut faire basculer le match
+4. L'HISTOIRE — confrontations historiques réelles en Coupe du Monde entre ces nations
 
-  return `Tu es rédacteur en chef d'une newsletter football de référence, style L'Équipe magazine ou The Athletic. Tu écris pour des fans passionnés de foot qui veulent de l'analyse et du récit, pas des anecdotes de quiz.
+⚠️ Si aucun résultat de groupe n'est disponible, ne pas supposer de classement : écrire "groupe encore indécis" ou "premier match pour ces deux équipes".`;
+  } else if (recentResults.length > 0) {
+    focusInstruction = `
+Pas de match aujourd'hui ni demain. Rédige un bilan de la phase de poules basé UNIQUEMENT sur les résultats fournis ci-dessus.
+- Analyse les surprises et confirmations parmi ces vrais résultats
+- Portrait d'une équipe ou d'un joueur qui ressort de ces matchs
+- Enjeux des prochaines journées de poule
 
-Date : ${dateStr}
+⚠️ N'invente aucun autre résultat que ceux listés ci-dessus.`;
+  } else {
+    focusInstruction = `
+Le tournoi n'a pas encore commencé (ou aucun résultat récent disponible). Rédige un grand article de preview :
+- L'enjeu historique : première Coupe du Monde à 48 équipes, 3 pays hôtes
+- Les groupes les plus ouverts et les favoris à surveiller (basé sur les groupes réels fournis et le classement FIFA)
+- Un portrait d'une équipe ou d'un groupe particulièrement explosif
+- Les questions tactiques et humaines qui feront ce tournoi
+
+⚠️ Zéro score, zéro résultat inventé. Mode anticipation uniquement.`;
+  }
+
+  return `Date de publication : ${dateStr}
 
 Matchs du jour :
 ${todayStr}
 
 Matchs de demain :
 ${tomorrowStr}
-
+${resultsBlock}
 ${focusInstruction}
-
-RÈGLES D'ÉCRITURE ABSOLUES :
-- Jamais de listes à puces dans le contenu des articles — du RÉCIT pur, des phrases complètes
-- Chaque paragraphe doit apporter une information ou une analyse concrète
-- Les chiffres et statistiques sont les bienvenus s'ils éclairent le propos (% possession, buts encaissés, classement FIFA, nb d'Coupes du Monde remportées…)
-- Le pullQuote doit être une phrase choc ou révélatrice — pas une généralité
-- Le keyPlayer doit être décrit avec précision : son rôle tactique exact dans CE match
-- Le statOfDay doit être un vrai chiffre intéressant lié au contexte (pas inventé)
-- Langue : français impeccable, ton passionné mais rigoureux
-- Maximum 2 articles
 
 Réponds UNIQUEMENT avec ce JSON valide (sans markdown, sans texte autour) :
 {
-  "subject": "Objet de l'email en français, percutant, max 60 caractères, avec emoji",
-  "preheader": "Sous-titre court, max 90 caractères",
-  "headline": "Grand titre éditorial de cette édition, narratif et fort (max 70 chars)",
-  "intro": "2-3 phrases d'introduction qui posent l'enjeu et donnent envie de lire. Ton éditorial.",
+  "subject": "Objet email en français, percutant, max 60 caractères, avec emoji",
+  "preheader": "Sous-titre, max 90 caractères",
+  "headline": "Grand titre éditorial, narratif et fort, max 70 caractères",
+  "intro": "2-3 phrases d'introduction qui posent l'enjeu. Ton éditorial.",
   "articles": [
     {
       "tag": "À LA UNE",
-      "matchTitle": "Équipe A · Équipe B (ou null si pas lié à un match)",
+      "matchTitle": "Équipe A · Équipe B (ou null)",
       "title": "Titre de l'article, narratif, accrocheur",
-      "content": "Corps de l'article — minimum 5 paragraphes séparés par \\n\\n. Récit, analyse tactique, contexte historique, enjeux de qualification. Pas de puces.",
-      "pullQuote": "Une seule phrase forte ou choc extraite du contenu",
+      "content": "Corps — minimum 5 paragraphes séparés par \\n\\n. Récit, analyse tactique, contexte historique réel. Aucune liste.",
+      "pullQuote": "Une phrase forte extraite du contenu",
       "keyPlayer": {
         "name": "Prénom Nom",
-        "team": "Pays de l'équipe",
-        "role": "Description précise de son rôle tactique dans ce match spécifique (2-3 phrases)"
+        "team": "Pays",
+        "role": "Rôle tactique précis dans ce match (2-3 phrases)"
       }
     }
   ],
   "statOfDay": {
-    "number": "chiffre ou nombre",
-    "unit": "unité optionnelle (ans, buts, matchs…)",
-    "label": "Explication du chiffre en contexte WC2026 (1-2 phrases)"
+    "number": "chiffre réel et vérifiable",
+    "unit": "unité optionnelle",
+    "label": "Contexte WC2026 (1-2 phrases)"
   }
-}`;
 }
+
+Maximum 2 articles. Tous les faits sont vérifiés. Aucun score inventé.`;
+}
+
+// ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function GET() {
   const key = process.env.DEEPSEEK_API_KEY;
   if (!key) {
-    return NextResponse.json({ ok: false, error: "DEEPSEEK_API_KEY non configurée" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: "DEEPSEEK_API_KEY non configurée" },
+      { status: 500 }
+    );
   }
 
-  const snap = await getDocs(
-    query(collection(db, "matches"), orderBy("kickoffUtc", "asc"))
-  );
+  let snap;
+  try {
+    snap = await getDocs(query(collection(db, "matches"), orderBy("kickoffUtc", "asc")));
+  } catch (err) {
+    return NextResponse.json(
+      { ok: false, error: `Erreur Firebase : ${err instanceof Error ? err.message : String(err)}` },
+      { status: 500 }
+    );
+  }
 
   const today: MatchRow[] = [];
   const tomorrow: MatchRow[] = [];
@@ -115,39 +246,75 @@ export async function GET() {
     else if (isTomorrow(kickoff)) tomorrow.push(row);
   });
 
+  const groups = buildGroupContext(snap.docs);
+  const recentResults = extractRecentResults(snap.docs);
+  const hasResults = recentResults.length > 0;
+
   const dateStr = format(new Date(), "EEEE d MMMM yyyy", { locale: fr });
-  const prompt = buildPrompt(today, tomorrow, dateStr);
+  const systemPrompt = buildSystemPrompt(groups, hasResults);
+  const userPrompt = buildUserPrompt(today, tomorrow, recentResults, dateStr);
 
-  const res = await fetch(DEEPSEEK_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
-    },
-    body: JSON.stringify({
-      model: "deepseek-chat",
-      max_tokens: 4000,
-      response_format: { type: "json_object" },
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
+  let res: Response;
+  try {
+    res = await fetch(DEEPSEEK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model: "deepseek-chat",
+        max_tokens: 4000,
+        temperature: 0.6,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      }),
+    });
+  } catch (err) {
     return NextResponse.json(
-      { ok: false, error: `DeepSeek ${res.status}: ${text.slice(0, 300)}` },
+      { ok: false, error: `Impossible de joindre DeepSeek : ${err instanceof Error ? err.message : String(err)}` },
       { status: 502 }
     );
   }
 
-  const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-  const raw = data.choices?.[0]?.message?.content ?? "{}";
+  if (!res.ok) {
+    const text = await res.text();
+    return NextResponse.json(
+      { ok: false, error: `DeepSeek ${res.status}: ${text.slice(0, 400)}` },
+      { status: 502 }
+    );
+  }
+
+  let aiData: { choices?: Array<{ message?: { content?: string } }> };
+  try {
+    aiData = await res.json() as typeof aiData;
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: "Réponse DeepSeek non parsable" },
+      { status: 502 }
+    );
+  }
+
+  const raw = aiData.choices?.[0]?.message?.content ?? "{}";
 
   let newsletter: Omit<NewsletterDraft, "matchesToday" | "matchesTomorrow" | "dateStr">;
   try {
     newsletter = JSON.parse(raw) as typeof newsletter;
   } catch {
-    return NextResponse.json({ ok: false, error: "Réponse IA invalide", raw }, { status: 502 });
+    return NextResponse.json(
+      { ok: false, error: "La réponse IA n'est pas un JSON valide", raw: raw.slice(0, 500) },
+      { status: 502 }
+    );
+  }
+
+  if (!newsletter.subject || !newsletter.articles?.length) {
+    return NextResponse.json(
+      { ok: false, error: "Structure JSON incomplète (subject ou articles manquants)", raw: raw.slice(0, 500) },
+      { status: 502 }
+    );
   }
 
   return NextResponse.json({

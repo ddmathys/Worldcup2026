@@ -3,18 +3,24 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
-import { Trophy, Mail, Lock, ArrowRight, Eye, EyeOff } from "lucide-react";
+import { Trophy, Mail, Lock, ArrowRight, Eye, EyeOff, CheckCircle } from "lucide-react";
 
 export default function LoginPage() {
-  const { signIn } = useAuth();
+  const { signIn, resetPassword } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const [forgotMode, setForgotMode] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
+  const [resetError, setResetError] = useState("");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -27,6 +33,20 @@ export default function LoginPage() {
       setError("Email ou mot de passe incorrect.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleReset(e: React.FormEvent) {
+    e.preventDefault();
+    setResetError("");
+    setResetLoading(true);
+    try {
+      await resetPassword(resetEmail);
+      setResetSent(true);
+    } catch {
+      setResetError("Aucun compte associé à cet email.");
+    } finally {
+      setResetLoading(false);
     }
   }
 
@@ -52,78 +72,192 @@ export default function LoginPage() {
         </Link>
 
         <div className="glass rounded-3xl p-8">
-          <h1 className="text-2xl font-black text-white mb-1">Connexion</h1>
-          <p className="text-white/50 text-sm mb-8">
-            Bienvenue ! Entre tes identifiants pour accéder au jeu.
-          </p>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2 block">
-                Email
-              </label>
-              <div className="relative">
-                <Mail size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  className="input-field pl-11"
-                  placeholder="ton@email.com"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2 block">
-                Mot de passe
-              </label>
-              <div className="relative">
-                <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  className="input-field pl-11 pr-11"
-                  placeholder="••••••••"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60"
-                >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
-
-            {error && (
-              <motion.p
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3"
+          <AnimatePresence mode="wait">
+            {!forgotMode ? (
+              <motion.div
+                key="login"
+                initial={{ opacity: 0, x: -16 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 16 }}
               >
-                {error}
-              </motion.p>
-            )}
+                <h1 className="text-2xl font-black text-white mb-1">Connexion</h1>
+                <p className="text-white/50 text-sm mb-8">
+                  Bienvenue ! Entre tes identifiants pour accéder au jeu.
+                </p>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-gold w-full flex items-center justify-center gap-2 text-base"
-            >
-              {loading ? (
-                <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <>
-                  Se connecter
-                  <ArrowRight size={18} />
-                </>
-              )}
-            </button>
-          </form>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  <div>
+                    <label className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2 block">
+                      Email
+                    </label>
+                    <div className="relative">
+                      <Mail size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
+                      <input
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        required
+                        className="input-field pl-11"
+                        placeholder="ton@email.com"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-semibold text-white/50 uppercase tracking-wider">
+                        Mot de passe
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setResetEmail(email);
+                          setForgotMode(true);
+                          setResetSent(false);
+                          setResetError("");
+                        }}
+                        className="text-xs text-yellow-400 hover:text-yellow-300 font-medium"
+                      >
+                        Mot de passe oublié ?
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
+                      <input
+                        type={showPassword ? "text" : "password"}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        required
+                        className="input-field pl-11 pr-11"
+                        placeholder="••••••••"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60"
+                      >
+                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {error && (
+                    <motion.p
+                      initial={{ opacity: 0, y: -8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3"
+                    >
+                      {error}
+                    </motion.p>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="btn-gold w-full flex items-center justify-center gap-2 text-base"
+                  >
+                    {loading ? (
+                      <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        Se connecter
+                        <ArrowRight size={18} />
+                      </>
+                    )}
+                  </button>
+                </form>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="forgot"
+                initial={{ opacity: 0, x: 16 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -16 }}
+              >
+                <h1 className="text-2xl font-black text-white mb-1">Mot de passe oublié</h1>
+                <p className="text-white/50 text-sm mb-8">
+                  On t&apos;envoie un lien de réinitialisation par email.
+                </p>
+
+                {resetSent ? (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="flex flex-col items-center gap-4 py-6"
+                  >
+                    <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 flex items-center justify-center">
+                      <CheckCircle size={28} className="text-emerald-400" />
+                    </div>
+                    <div className="text-center">
+                      <p className="text-white font-semibold mb-1">Email envoyé !</p>
+                      <p className="text-white/50 text-sm">
+                        Vérifie ta boîte de réception pour{" "}
+                        <span className="text-white/70">{resetEmail}</span>
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setForgotMode(false)}
+                      className="text-sm text-yellow-400 hover:text-yellow-300 font-medium mt-2"
+                    >
+                      Retour à la connexion
+                    </button>
+                  </motion.div>
+                ) : (
+                  <form onSubmit={handleReset} className="space-y-4">
+                    <div>
+                      <label className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2 block">
+                        Email
+                      </label>
+                      <div className="relative">
+                        <Mail size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
+                        <input
+                          type="email"
+                          value={resetEmail}
+                          onChange={(e) => setResetEmail(e.target.value)}
+                          required
+                          className="input-field pl-11"
+                          placeholder="ton@email.com"
+                        />
+                      </div>
+                    </div>
+
+                    {resetError && (
+                      <motion.p
+                        initial={{ opacity: 0, y: -8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3"
+                      >
+                        {resetError}
+                      </motion.p>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={resetLoading}
+                      className="btn-gold w-full flex items-center justify-center gap-2 text-base"
+                    >
+                      {resetLoading ? (
+                        <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <>
+                          Envoyer le lien
+                          <ArrowRight size={18} />
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setForgotMode(false)}
+                      className="w-full text-sm text-white/40 hover:text-white/60 pt-1"
+                    >
+                      Retour à la connexion
+                    </button>
+                  </form>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         <p className="text-center text-sm text-white/40 mt-6">
