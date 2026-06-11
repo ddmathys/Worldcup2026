@@ -26,8 +26,8 @@ const TEAM_NAME_MAP: Record<string, string> = {
   "Ivory Coast": "civ", "Côte d'Ivoire": "civ", "Cote d'Ivoire": "civ",
   Ecuador: "ecu",
   Netherlands: "ned", Japan: "jpn", Sweden: "swe", Tunisia: "tun",
-  Belgium: "bel", Egypt: "egy", Iran: "irn", "New Zealand": "nzl",
-  Spain: "esp", "Cape Verde": "cpv", "Saudi Arabia": "ksa", Uruguay: "uru",
+  Belgium: "bel", Egypt: "egy", Iran: "irn", "IR Iran": "irn", "New Zealand": "nzl",
+  Spain: "esp", "Cape Verde": "cpv", "Cabo Verde": "cpv", "Saudi Arabia": "ksa", Uruguay: "uru",
   France: "fra", Senegal: "sen", Norway: "nor", Iraq: "irq",
   Argentina: "arg", Algeria: "alg", Austria: "aut", Jordan: "jor",
   Portugal: "por",
@@ -132,38 +132,51 @@ function normalizeGroupCode(raw: string | null | undefined): string | null {
 }
 
 interface MatchIndex {
-  byApiId: Map<string, string>;
+  byApiId: Map<string, { docId: string; isExt: boolean }>;
   byTeams: Map<string, string>;
 }
 
+// Un doc avec une équipe ext_* vient d'un échec de mapping de nom : il n'est
+// pas indexé par équipes (clé inutilisable) mais reste retrouvable par apiId.
 async function getExistingMatchIndex(): Promise<MatchIndex> {
   const adminDb = getAdminDb();
   const snap = await adminDb.collection("matches").get();
-  const byApiId = new Map<string, string>();
+  const byApiId = new Map<string, { docId: string; isExt: boolean }>();
   const byTeams = new Map<string, string>();
   snap.docs.forEach((d) => {
     const data = d.data();
-    if (data.apiMatchId) byApiId.set(String(data.apiMatchId), d.id);
-    if (data.phase && data.homeTeamId && data.awayTeamId) {
+    const isExt =
+      String(data.homeTeamId ?? "").startsWith("ext_") ||
+      String(data.awayTeamId ?? "").startsWith("ext_");
+    if (data.apiMatchId) byApiId.set(String(data.apiMatchId), { docId: d.id, isExt });
+    if (data.phase && data.homeTeamId && data.awayTeamId && !isExt) {
       byTeams.set(teamPairKey(data.phase, data.homeTeamId, data.awayTeamId), d.id);
     }
   });
   return { byApiId, byTeams };
 }
 
+// Choisit le doc à mettre à jour, et signale un éventuel doublon ext_* à
+// supprimer (créé par une sync passée avant que le nom d'équipe soit mappé).
 function findExistingDoc(
   index: MatchIndex,
   apiMatchId: string,
   phase: string,
   homeId: string,
   awayId: string
-): string | undefined {
+): { docId?: string; staleExtDocId?: string } {
   const byId = index.byApiId.get(apiMatchId);
-  if (byId) return byId;
+  if (byId && !byId.isExt) return { docId: byId.docId };
   const key = teamPairKey(phase, homeId, awayId);
-  const docId = index.byTeams.get(key);
-  if (docId) index.byTeams.delete(key);
-  return docId;
+  const pairDoc = index.byTeams.get(key);
+  if (pairDoc) {
+    index.byTeams.delete(key);
+    return {
+      docId: pairDoc,
+      staleExtDocId: byId && byId.docId !== pairDoc ? byId.docId : undefined,
+    };
+  }
+  return { docId: byId?.docId };
 }
 
 // Champs à ne pas écraser sur un doc existant quand l'API ne les fournit pas,
@@ -235,12 +248,13 @@ export async function syncMatchesWC2026(): Promise<{ synced: number; errors: num
         m.home_score ?? null, m.away_score ?? null,
         String(m.id)
       );
-      const existing = findExistingDoc(index, String(m.id), phase, home.id, away.id);
-      if (existing) {
-        batch.update(adminDb.collection("matches").doc(existing), pruneForUpdate(data));
+      const { docId, staleExtDocId } = findExistingDoc(index, String(m.id), phase, home.id, away.id);
+      if (docId) {
+        batch.update(adminDb.collection("matches").doc(docId), pruneForUpdate(data));
       } else {
         batch.set(adminDb.collection("matches").doc(), data);
       }
+      if (staleExtDocId) batch.delete(adminDb.collection("matches").doc(staleExtDocId));
       synced++;
     } catch { errors++; }
   }
@@ -261,7 +275,7 @@ export async function syncScoresWC2026(): Promise<{ updated: number; provider: s
     if (m.status !== "live" && m.status !== "finished") continue;
     // Scores : matching par apiMatchId uniquement — le fallback par équipes
     // risquerait d'inverser home/away. La sync "matches" pose l'apiMatchId.
-    const docId = index.byApiId.get(String(m.id));
+    const docId = index.byApiId.get(String(m.id))?.docId;
     if (!docId) continue;
     batch.update(adminDb.collection("matches").doc(docId), {
       homeScore: m.home_score ?? null,
@@ -297,12 +311,13 @@ export async function syncMatchesApiFootball(): Promise<{ synced: number; errors
         f.goals.home, f.goals.away,
         String(f.fixture.id)
       );
-      const existing = findExistingDoc(index, String(f.fixture.id), phase, home.id, away.id);
-      if (existing) {
-        batch.update(adminDb.collection("matches").doc(existing), pruneForUpdate(data2));
+      const { docId, staleExtDocId } = findExistingDoc(index, String(f.fixture.id), phase, home.id, away.id);
+      if (docId) {
+        batch.update(adminDb.collection("matches").doc(docId), pruneForUpdate(data2));
       } else {
         batch.set(adminDb.collection("matches").doc(), data2);
       }
+      if (staleExtDocId) batch.delete(adminDb.collection("matches").doc(staleExtDocId));
       synced++;
     } catch { errors++; }
   }
@@ -318,7 +333,7 @@ export async function syncScoresApiFootball(): Promise<{ updated: number; provid
   let updated = 0;
 
   for (const f of data.response) {
-    const docId = index.byApiId.get(String(f.fixture.id));
+    const docId = index.byApiId.get(String(f.fixture.id))?.docId;
     if (!docId) continue;
     const status = mapStatus(f.fixture.status.short);
     batch.update(adminDb.collection("matches").doc(docId), {
