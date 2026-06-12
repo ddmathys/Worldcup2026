@@ -30,6 +30,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...result });
     }
 
+    if (type === "recalc") {
+      // Recalcul seul, côté serveur (SDK Admin) : le recalcul côté client est
+      // bloqué par les règles Firestore (update des predictions d'autrui).
+      await recalculateAllPointsAdmin();
+      return NextResponse.json({ ok: true });
+    }
+
     return NextResponse.json({ error: "type invalide" }, { status: 400 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Erreur inconnue";

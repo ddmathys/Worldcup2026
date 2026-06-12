@@ -326,7 +326,15 @@ export async function syncMatchesApiFootball(): Promise<{ synced: number; errors
 }
 
 export async function syncScoresApiFootball(): Promise<{ updated: number; provider: string }> {
-  const data = await fetchApiFootball("/fixtures?league=1&season=2026&live=all");
+  // live=all ne renvoie que les matchs en cours de jeu : un match terminé
+  // disparaît de la réponse et ne serait donc jamais marqué isFinished.
+  // On requête par fenêtre de dates (hier → demain) pour couvrir les matchs
+  // live ET récemment terminés.
+  const day = (offset: number) =>
+    new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+  const data = await fetchApiFootball(
+    `/fixtures?league=1&season=2026&from=${day(-1)}&to=${day(1)}`
+  );
   const adminDb = getAdminDb();
   const index = await getExistingMatchIndex();
   const batch = adminDb.batch();

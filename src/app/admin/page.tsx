@@ -10,7 +10,6 @@ import {
   setMatchResult,
   updateMatchStatus,
   getAllUsers,
-  recalculateAllPoints,
 } from "@/lib/firestore";
 import type { Match, UserProfile } from "@/types";
 import FlagImage from "@/components/FlagImage";
@@ -41,7 +40,7 @@ import type { NewsletterDraft as NLDraft } from "@/lib/newsletter-template";
 import { buildFreeEmailHtml } from "@/lib/email-templates";
 import clsx from "clsx";
 
-async function callSyncAPI(type: "scores") {
+async function callSyncAPI(type: "scores" | "recalc") {
   const res = await fetch("/api/sync", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -117,7 +116,9 @@ export default function AdminPage() {
   async function handleRecalculate() {
     setRecalcLoading(true);
     try {
-      await recalculateAllPoints();
+      // Recalcul côté serveur : la version client (lib/firestore) est bloquée
+      // par les règles Firestore sur les predictions des autres joueurs.
+      await callSyncAPI("recalc");
       toast.success("Points recalculés !");
       const updated = await getAllUsers();
       setUsers(updated);
@@ -155,7 +156,7 @@ export default function AdminPage() {
     const qualId = match.phase !== "group" ? inputs.qualified || null : null;
     try {
       await setMatchResult(match.id, h, a, qualId);
-      await recalculateAllPoints();
+      await callSyncAPI("recalc");
       toast.success("Résultat enregistré + points recalculés !");
       setExpandedMatch(null);
       const updated = await getAllUsers();
