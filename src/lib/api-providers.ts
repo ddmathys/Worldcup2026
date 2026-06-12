@@ -59,10 +59,13 @@ function mapPhase(round: string): Match["phase"] {
   return "group";
 }
 
+const FINISHED_STATUSES = ["finished", "ft", "aet", "pen", "completed", "ended", "full_time", "fulltime", "after_extra_time", "penalties"];
+const LIVE_STATUSES = ["live", "1h", "2h", "ht", "et", "bt", "p", "in_play", "inplay", "playing", "started", "half_time", "halftime"];
+
 function mapStatus(s: string): Match["status"] {
   s = s.toLowerCase();
-  if (s === "finished" || s === "ft" || s === "aet" || s === "pen") return "finished";
-  if (s === "live" || s === "1h" || s === "2h" || s === "ht" || s === "et" || s === "bt" || s === "p") return "live";
+  if (FINISHED_STATUSES.includes(s)) return "finished";
+  if (LIVE_STATUSES.includes(s)) return "live";
   if (s === "locked") return "locked";
   return "open";
 }
@@ -262,7 +265,14 @@ export async function syncMatchesWC2026(): Promise<{ synced: number; errors: num
   return { synced, errors, provider: "wc2026api.com" };
 }
 
-export async function syncScoresWC2026(): Promise<{ updated: number; provider: string }> {
+export interface ScoreSyncResult {
+  updated: number;
+  provider: string;
+  seen: number;
+  statuses: Record<string, number>;
+}
+
+export async function syncScoresWC2026(): Promise<ScoreSyncResult> {
   const raw = await fetchWC2026("/matches");
   const list: WC2026Match[] = Array.isArray(raw) ? raw : (raw as { matches: WC2026Match[] }).matches ?? [];
 
@@ -270,9 +280,11 @@ export async function syncScoresWC2026(): Promise<{ updated: number; provider: s
   const index = await getExistingMatchIndex();
   const batch = adminDb.batch();
   let updated = 0;
+  const statuses: Record<string, number> = {};
 
   for (const m of list) {
-    if (m.status !== "live" && m.status !== "finished") continue;
+    statuses[m.status] = (statuses[m.status] ?? 0) + 1;
+    if (mapStatus(m.status) !== "live" && mapStatus(m.status) !== "finished") continue;
     // Scores : matching par apiMatchId uniquement — le fallback par équipes
     // risquerait d'inverser home/away. La sync "matches" pose l'apiMatchId.
     const docId = index.byApiId.get(String(m.id))?.docId;
@@ -281,12 +293,12 @@ export async function syncScoresWC2026(): Promise<{ updated: number; provider: s
       homeScore: m.home_score ?? null,
       awayScore: m.away_score ?? null,
       status: mapStatus(m.status),
-      isFinished: m.status === "finished",
+      isFinished: mapStatus(m.status) === "finished",
     });
     updated++;
   }
   await batch.commit();
-  return { updated, provider: "wc2026api.com" };
+  return { updated, provider: "wc2026api.com", seen: list.length, statuses };
 }
 
 export async function syncMatchesApiFootball(): Promise<{ synced: number; errors: number; provider: string }> {
@@ -325,7 +337,7 @@ export async function syncMatchesApiFootball(): Promise<{ synced: number; errors
   return { synced, errors, provider: "api-football.com" };
 }
 
-export async function syncScoresApiFootball(): Promise<{ updated: number; provider: string }> {
+export async function syncScoresApiFootball(): Promise<ScoreSyncResult> {
   // live=all ne renvoie que les matchs en cours de jeu : un match terminé
   // disparaît de la réponse et ne serait donc jamais marqué isFinished.
   // On requête par fenêtre de dates (hier → demain) pour couvrir les matchs
@@ -339,8 +351,10 @@ export async function syncScoresApiFootball(): Promise<{ updated: number; provid
   const index = await getExistingMatchIndex();
   const batch = adminDb.batch();
   let updated = 0;
+  const statuses: Record<string, number> = {};
 
   for (const f of data.response) {
+    statuses[f.fixture.status.short] = (statuses[f.fixture.status.short] ?? 0) + 1;
     const docId = index.byApiId.get(String(f.fixture.id))?.docId;
     if (!docId) continue;
     const status = mapStatus(f.fixture.status.short);
@@ -353,7 +367,7 @@ export async function syncScoresApiFootball(): Promise<{ updated: number; provid
     updated++;
   }
   await batch.commit();
-  return { updated, provider: "api-football.com" };
+  return { updated, provider: "api-football.com", seen: data.response.length, statuses };
 }
 
 function extractGroup(round: string): string | null {

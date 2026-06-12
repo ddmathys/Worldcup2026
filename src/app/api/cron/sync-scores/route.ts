@@ -35,11 +35,21 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: true, skipped: true, reason: "no match in update window" });
   }
 
+  // Même logique que /api/sync : wc2026api peut répondre sans erreur mais
+  // sans match exploitable, on bascule alors sur API-Football.
   let result;
   try {
     result = await syncScoresWC2026();
   } catch {
-    result = await syncScoresApiFootball();
+    result = null;
+  }
+  if (!result || result.updated === 0) {
+    try {
+      const fallback = await syncScoresApiFootball();
+      result = result && result.updated >= fallback.updated ? result : fallback;
+    } catch (e) {
+      if (!result) throw e;
+    }
   }
   await recalculateAllPointsAdmin();
   return NextResponse.json({ ok: true, ...result });
