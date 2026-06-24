@@ -5,78 +5,10 @@ import { motion } from "framer-motion";
 import Navigation from "@/components/Navigation";
 import FlagImage from "@/components/FlagImage";
 import { subscribeMatches } from "@/lib/firestore";
-import type { Match, Team } from "@/types";
+import { computeStandings, type TeamStanding } from "@/lib/standings";
+import type { Match } from "@/types";
 import { Loader2, ChevronUp, Minus, ChevronDown, Radio } from "lucide-react";
 import clsx from "clsx";
-
-interface TeamStanding {
-  team: Team;
-  played: number;
-  won: number;
-  drawn: number;
-  lost: number;
-  goalsFor: number;
-  goalsAgainst: number;
-  points: number;
-  form: ("W" | "D" | "L")[];
-}
-
-function computeStandings(matches: Match[]): Map<string, TeamStanding[]> {
-  const groups = new Map<string, Map<string, TeamStanding>>();
-  // track finished matches per team in chronological order for form
-  const teamMatchHistory = new Map<string, { kickoff: Date; result: "W" | "D" | "L" }[]>();
-
-  const groupMatches = matches
-    .filter((m) => m.phase === "group")
-    .sort((a, b) => a.kickoffUtc.getTime() - b.kickoffUtc.getTime());
-
-  groupMatches.forEach((m) => {
-    const g = m.groupCode!;
-    if (!groups.has(g)) groups.set(g, new Map());
-    const gs = groups.get(g)!;
-
-    if (!gs.has(m.homeTeamId))
-      gs.set(m.homeTeamId, { team: m.homeTeam, played: 0, won: 0, drawn: 0, lost: 0, goalsFor: 0, goalsAgainst: 0, points: 0, form: [] });
-    if (!gs.has(m.awayTeamId))
-      gs.set(m.awayTeamId, { team: m.awayTeam, played: 0, won: 0, drawn: 0, lost: 0, goalsFor: 0, goalsAgainst: 0, points: 0, form: [] });
-
-    if (!m.isFinished || m.homeScore === null || m.awayScore === null) return;
-
-    const home = gs.get(m.homeTeamId)!;
-    const away = gs.get(m.awayTeamId)!;
-
-    home.played++; away.played++;
-    home.goalsFor += m.homeScore; home.goalsAgainst += m.awayScore;
-    away.goalsFor += m.awayScore; away.goalsAgainst += m.homeScore;
-
-    if (m.homeScore > m.awayScore) {
-      home.won++; home.points += 3; away.lost++;
-      home.form.push("W"); away.form.push("L");
-    } else if (m.homeScore < m.awayScore) {
-      away.won++; away.points += 3; home.lost++;
-      home.form.push("L"); away.form.push("W");
-    } else {
-      home.drawn++; home.points++; away.drawn++; away.points++;
-      home.form.push("D"); away.form.push("D");
-    }
-  });
-
-  const result = new Map<string, TeamStanding[]>();
-  groups.forEach((gs, group) => {
-    result.set(
-      group,
-      Array.from(gs.values()).sort((a, b) => {
-        if (b.points !== a.points) return b.points - a.points;
-        const gdB = b.goalsFor - b.goalsAgainst;
-        const gdA = a.goalsFor - a.goalsAgainst;
-        if (gdB !== gdA) return gdB - gdA;
-        if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor;
-        return a.team.name.localeCompare(b.team.name);
-      })
-    );
-  });
-  return result;
-}
 
 function TrendIcon({ rank }: { rank: number }) {
   if (rank <= 2) return <ChevronUp size={14} className="text-emerald-400" />;

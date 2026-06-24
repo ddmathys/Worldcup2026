@@ -63,6 +63,7 @@ export default function PredictionsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [groupFilter, setGroupFilter] = useState("all");
   const [pendingOnly, setPendingOnly] = useState(false);
+  const [unfinishedOnly, setUnfinishedOnly] = useState(true);
   const [aiMethod, setAiMethod] = useState<AiMethodKey>("ai");
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiGeneratingMatchId, setAiGeneratingMatchId] = useState<string | null>(null);
@@ -99,29 +100,41 @@ export default function PredictionsPage() {
   ).sort();
 
   const pendingCount = matches.filter((m) => !predictions.has(m.id)).length;
+  const unfinishedCount = matches.filter((m) => computeStatus(m) !== "finished").length;
 
-  const filtered = matches.filter((m) => {
-    if (pendingOnly && predictions.has(m.id)) return false;
-    if (phaseFilter === "group" && m.phase !== "group") return false;
-    if (phaseFilter === "knockout" && m.phase === "group") return false;
-    if (statusFilter !== "all") {
-      const s = computeStatus(m);
-      if (statusFilter === "open" && s !== "open" && s !== "soon") return false;
-      if (statusFilter === "locked" && s !== "locked") return false;
-      if (statusFilter === "finished" && s !== "finished") return false;
-    }
-    if (groupFilter !== "all" && m.groupCode !== groupFilter) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      if (
-        !m.homeTeam.name.toLowerCase().includes(q) &&
-        !m.awayTeam.name.toLowerCase().includes(q) &&
-        !m.city.toLowerCase().includes(q)
-      )
+  const filtered = matches
+    .filter((m) => {
+      if (pendingOnly && predictions.has(m.id)) return false;
+      // "Non terminés" : masque les matchs terminés (sauf si on demande explicitement les terminés)
+      if (unfinishedOnly && statusFilter !== "finished" && computeStatus(m) === "finished")
         return false;
-    }
-    return true;
-  });
+      if (phaseFilter === "group" && m.phase !== "group") return false;
+      if (phaseFilter === "knockout" && m.phase === "group") return false;
+      if (statusFilter !== "all") {
+        const s = computeStatus(m);
+        if (statusFilter === "open" && s !== "open" && s !== "soon") return false;
+        if (statusFilter === "locked" && s !== "locked") return false;
+        if (statusFilter === "finished" && s !== "finished") return false;
+      }
+      if (groupFilter !== "all" && m.groupCode !== groupFilter) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        if (
+          !m.homeTeam.name.toLowerCase().includes(q) &&
+          !m.awayTeam.name.toLowerCase().includes(q) &&
+          !m.city.toLowerCase().includes(q)
+        )
+          return false;
+      }
+      return true;
+    })
+    // Les matchs non terminés remontent en tête de liste, l'ordre par kickoff est conservé à l'intérieur
+    .sort((a, b) => {
+      const aDone = computeStatus(a) === "finished" ? 1 : 0;
+      const bDone = computeStatus(b) === "finished" ? 1 : 0;
+      if (aDone !== bDone) return aDone - bDone;
+      return a.kickoffUtc.getTime() - b.kickoffUtc.getTime();
+    });
 
   const total = matches.length;
   const filled = matches.filter((m) => predictions.has(m.id)).length;
@@ -330,6 +343,28 @@ export default function PredictionsPage() {
                 </button>
               ))}
             </div>
+
+            <button
+              onClick={() => setUnfinishedOnly((v) => !v)}
+              className={clsx(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all border",
+                unfinishedOnly
+                  ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/40"
+                  : "bg-white/5 text-white/50 hover:text-white border-white/10"
+              )}
+              title={unfinishedOnly ? "Affiche uniquement les matchs à venir ou en cours" : "Affiche aussi les matchs terminés"}
+            >
+              <span>🟢</span>
+              Non terminés
+              {unfinishedCount > 0 && (
+                <span className={clsx(
+                  "ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none",
+                  unfinishedOnly ? "bg-emerald-500/30 text-emerald-300" : "bg-white/10 text-white/50"
+                )}>
+                  {unfinishedCount}
+                </span>
+              )}
+            </button>
 
             <button
               onClick={() => setPendingOnly((v) => !v)}
