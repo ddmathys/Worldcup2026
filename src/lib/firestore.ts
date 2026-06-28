@@ -15,6 +15,7 @@ import {
   type QueryConstraint,
 } from "firebase/firestore";
 import { db } from "./firebase";
+import { scorePrediction } from "./scoring";
 import type { Match, Prediction, UserProfile, Team } from "@/types";
 
 // --- Helpers ---
@@ -312,36 +313,21 @@ export async function recalculateAllPoints(): Promise<void> {
     const match = matches.get(pred.matchId);
     if (!match || !match.isFinished) return;
 
-    let points = 0;
-    const ph = pred.predictedHomeScore;
-    const pa = pred.predictedAwayScore;
-    const rh = match.homeScore;
-    const ra = match.awayScore;
-
-    if (rh !== null && ra !== null && ph !== null && pa !== null) {
-      if (match.phase === "group") {
-        if (ph === rh && pa === ra) points = 3;
-        else if (Math.sign(ph - pa) === Math.sign(rh - ra)) points = 1;
-      } else if (match.phase === "final") {
-        const exact = ph === rh && pa === ra;
-        const correct = pred.predictedQualifiedTeamId === match.qualifiedTeamId;
-        if (exact && correct) points = 12;
-        else if (correct) points = 3;
-      } else {
-        const exact = ph === rh && pa === ra;
-        const correct = pred.predictedQualifiedTeamId === match.qualifiedTeamId;
-        if (exact && correct) points = 6;
-        else if (correct) points = 2;
-      }
-    }
+    const { points, exact, correct } = scorePrediction(
+      match.phase,
+      pred.predictedHomeScore,
+      pred.predictedAwayScore,
+      match.homeScore,
+      match.awayScore
+    );
 
     batch.update(doc(db, "predictions", predDoc.id), { pointsAwarded: points });
 
     if (userPoints.has(uid)) {
       const u = userPoints.get(uid)!;
       u.total += points;
-      if (points === 3 || points === 6 || points === 12) u.exact += 1;
-      else if (points > 0) u.winner += 1;
+      if (exact) u.exact += 1;
+      else if (correct) u.winner += 1;
     }
   });
 

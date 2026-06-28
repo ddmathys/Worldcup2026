@@ -44,7 +44,6 @@ function computeStatus(match: Match): VisualStatus {
 export default function MatchCard({ match, prediction, userId, onSaved, onAiGenerate, aiGenerating = false }: MatchCardProps) {
   const status = computeStatus(match);
   const isEditable = status === "open" || status === "soon";
-  const isKnockout = match.phase !== "group";
 
   const [homeVal, setHomeVal] = useState(
     prediction?.predictedHomeScore != null ? String(prediction.predictedHomeScore) : ""
@@ -52,16 +51,12 @@ export default function MatchCard({ match, prediction, userId, onSaved, onAiGene
   const [awayVal, setAwayVal] = useState(
     prediction?.predictedAwayScore != null ? String(prediction.predictedAwayScore) : ""
   );
-  const [qualifiedId, setQualifiedId] = useState(
-    prediction?.predictedQualifiedTeamId ?? ""
-  );
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setHomeVal(prediction?.predictedHomeScore != null ? String(prediction.predictedHomeScore) : "");
     setAwayVal(prediction?.predictedAwayScore != null ? String(prediction.predictedAwayScore) : "");
-    setQualifiedId(prediction?.predictedQualifiedTeamId ?? "");
-  }, [prediction?.id, prediction?.predictedHomeScore, prediction?.predictedAwayScore, prediction?.predictedQualifiedTeamId]);
+  }, [prediction?.id, prediction?.predictedHomeScore, prediction?.predictedAwayScore]);
 
   async function handleSave() {
     const h = parseInt(homeVal);
@@ -70,21 +65,9 @@ export default function MatchCard({ match, prediction, userId, onSaved, onAiGene
       toast.error("Score invalide");
       return;
     }
-    let finalQualifiedId: string | null = null;
-    if (isKnockout) {
-      if (h !== a) {
-        finalQualifiedId = h > a ? match.homeTeam.id : match.awayTeam.id;
-      } else {
-        if (!qualifiedId) {
-          toast.error("Choisissez l'équipe qualifiée en cas de nul");
-          return;
-        }
-        finalQualifiedId = qualifiedId;
-      }
-    }
     setSaving(true);
     try {
-      await savePrediction(userId, match.id, match.lockAtUtc, h, a, finalQualifiedId);
+      await savePrediction(userId, match.id, match.lockAtUtc, h, a, null);
       toast.success("Pronostic enregistré !");
       onSaved?.();
     } catch (e: unknown) {
@@ -202,27 +185,6 @@ export default function MatchCard({ match, prediction, userId, onSaved, onAiGene
           </span>
         </div>
       </div>
-
-      {/* Qualifier selector */}
-      {isKnockout && isEditable && homeVal !== "" && homeVal === awayVal && (
-        <div className="px-3 pb-2">
-          <div className="p-2 rounded-lg bg-white/5 border border-white/10">
-            <p className="text-[10px] text-white/40 mb-1.5 text-center">Équipe qualifiée si nul :</p>
-            <div className="flex gap-1.5">
-              {[match.homeTeam, match.awayTeam].map((team) => (
-                <button key={team.id} onClick={() => setQualifiedId(team.id)}
-                  className={clsx(
-                    "flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-semibold transition-all",
-                    qualifiedId === team.id ? "bg-yellow-400/20 text-yellow-400 border border-yellow-400/40" : "bg-white/5 text-white/50 border border-white/10 hover:bg-white/10"
-                  )}>
-                  <FlagImage code={team.code} name={team.name} size={16} />
-                  {team.name}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Footer */}
       {(isEditable || (!isEditable && status !== "live" && status !== "finished")) && (

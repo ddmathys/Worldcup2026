@@ -40,7 +40,7 @@ import type { NewsletterDraft as NLDraft } from "@/lib/newsletter-template";
 import { buildFreeEmailHtml } from "@/lib/email-templates";
 import clsx from "clsx";
 
-async function callSyncAPI(type: "scores" | "recalc") {
+async function callSyncAPI(type: "scores" | "recalc" | "matches") {
   const res = await fetch("/api/sync", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -60,6 +60,7 @@ export default function AdminPage() {
   const [recalcLoading, setRecalcLoading] = useState(false);
   const [migrateLoading, setMigrateLoading] = useState(false);
   const [syncScoresLoading, setSyncScoresLoading] = useState(false);
+  const [syncMatchesLoading, setSyncMatchesLoading] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [expandedMatch, setExpandedMatch] = useState<string | null>(null);
   const [resultInputs, setResultInputs] = useState<
@@ -126,6 +127,23 @@ export default function AdminPage() {
       toast.error("Erreur lors du recalcul.");
     } finally {
       setRecalcLoading(false);
+    }
+  }
+
+  async function handleSyncMatches() {
+    setSyncMatchesLoading(true);
+    try {
+      const res = await callSyncAPI("matches");
+      toast.success(
+        `${res.synced ?? 0} matchs synchronisés` +
+          `${res.skipped ? ` · ${res.skipped} terminés préservés` : ""}` +
+          `${res.errors ? ` · ${res.errors} en attente (équipes non connues)` : ""}`
+      );
+      setLastSync(new Date());
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Erreur sync calendrier");
+    } finally {
+      setSyncMatchesLoading(false);
     }
   }
 
@@ -345,6 +363,23 @@ export default function AdminPage() {
               </div>
 
               <div className="divide-y divide-white/5">
+                {/* Sync matchs / calendrier */}
+                <div className="flex items-center gap-4 px-5 py-4">
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-white">Synchroniser le calendrier</p>
+                    <p className="text-xs text-white/35 mt-0.5">Crée / met à jour les matchs depuis l'API (verrou auto à kickoff − 1h)</p>
+                    <p className="text-[10px] text-white/20 mt-0.5">À lancer quand de nouveaux matchs à élimination sont connus</p>
+                  </div>
+                  <button
+                    onClick={handleSyncMatches}
+                    disabled={syncMatchesLoading}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-yellow-400/15 text-yellow-400 border border-yellow-400/25 hover:bg-yellow-400/25 transition-all disabled:opacity-40 shrink-0"
+                  >
+                    {syncMatchesLoading ? <Loader2 size={13} className="animate-spin" /> : <Trophy size={13} />}
+                    Lancer
+                  </button>
+                </div>
+
                 {/* Sync scores */}
                 <div className="flex items-center gap-4 px-5 py-4">
                   <div className="flex-1">

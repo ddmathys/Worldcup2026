@@ -151,7 +151,12 @@ export default function BracketPage() {
   const hasKnockoutData = knockoutMatches.length > 0;
 
   const phases = PHASES.filter((p) => knockoutMatches.some((m) => m.phase === p.key));
-  const phaseMatches = knockoutMatches.filter((m) => m.phase === activePhase);
+  // Si la phase active n'a aucun match (ex. juste après la création des 16es,
+  // les tours suivants n'existent pas encore), on retombe sur la 1re disponible.
+  const effectivePhase = phases.some((p) => p.key === activePhase)
+    ? activePhase
+    : phases[0]?.key ?? activePhase;
+  const phaseMatches = knockoutMatches.filter((m) => m.phase === effectivePhase);
 
   const confirmedCount = useMemo(() => {
     if (hasKnockoutData) return 0;
@@ -218,7 +223,7 @@ export default function BracketPage() {
                   onClick={() => setActivePhase(key)}
                   className={clsx(
                     "px-4 py-2 rounded-xl text-sm font-semibold transition-all",
-                    activePhase === key
+                    effectivePhase === key
                       ? "bg-yellow-400/20 text-yellow-400 border border-yellow-400/30"
                       : "glass text-white/50 hover:text-white"
                   )}

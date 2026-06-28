@@ -1,7 +1,8 @@
 import { getAdminAuth } from "./firebase-admin";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getApps } from "firebase-admin/app";
-import type { UserProfile, UserRole } from "@/types";
+import { scorePrediction } from "./scoring";
+import type { Match, UserProfile, UserRole } from "@/types";
 
 function getAdminDb() {
   getAdminAuth();
@@ -35,36 +36,21 @@ export async function recalculateAllPointsAdmin(): Promise<void> {
     const match = matches.get(pred.matchId as string);
     if (!match || !match.isFinished) continue;
 
-    let points = 0;
-    const ph = pred.predictedHomeScore as number | null;
-    const pa = pred.predictedAwayScore as number | null;
-    const rh = match.homeScore as number | null;
-    const ra = match.awayScore as number | null;
-
-    if (rh !== null && ra !== null && ph !== null && pa !== null) {
-      if (match.phase === "group") {
-        if (ph === rh && pa === ra) points = 3;
-        else if (Math.sign(ph - pa) === Math.sign(rh - ra)) points = 1;
-      } else if (match.phase === "final") {
-        const exact = ph === rh && pa === ra;
-        const correct = pred.predictedQualifiedTeamId === match.qualifiedTeamId;
-        if (exact && correct) points = 12;
-        else if (correct) points = 3;
-      } else {
-        const exact = ph === rh && pa === ra;
-        const correct = pred.predictedQualifiedTeamId === match.qualifiedTeamId;
-        if (exact && correct) points = 6;
-        else if (correct) points = 2;
-      }
-    }
+    const { points, exact, correct } = scorePrediction(
+      match.phase as Match["phase"],
+      pred.predictedHomeScore as number | null,
+      pred.predictedAwayScore as number | null,
+      match.homeScore as number | null,
+      match.awayScore as number | null
+    );
 
     batch.update(db.collection("predictions").doc(predDoc.id), { pointsAwarded: points });
     ops++;
     if (userPoints.has(uid)) {
       const u = userPoints.get(uid)!;
       u.total += points;
-      if (points === 3 || points === 6 || points === 12) u.exact += 1;
-      else if (points > 0) u.winner += 1;
+      if (exact) u.exact += 1;
+      else if (correct) u.winner += 1;
     }
 
     if (ops >= BATCH_SIZE) {

@@ -137,6 +137,9 @@ function normalizeGroupCode(raw: string | null | undefined): string | null {
 interface MatchIndex {
   byApiId: Map<string, { docId: string; isExt: boolean }>;
   byTeams: Map<string, string>;
+  // Docs déjà terminés en base : leur résultat est figé, la sync calendrier ne
+  // doit jamais les réécrire (garantie « aucune régression »).
+  finishedDocIds: Set<string>;
 }
 
 // Un doc avec une équipe ext_* vient d'un échec de mapping de nom : il n'est
@@ -146,6 +149,7 @@ async function getExistingMatchIndex(): Promise<MatchIndex> {
   const snap = await adminDb.collection("matches").get();
   const byApiId = new Map<string, { docId: string; isExt: boolean }>();
   const byTeams = new Map<string, string>();
+  const finishedDocIds = new Set<string>();
   snap.docs.forEach((d) => {
     const data = d.data();
     const isExt =
@@ -155,8 +159,9 @@ async function getExistingMatchIndex(): Promise<MatchIndex> {
     if (data.phase && data.homeTeamId && data.awayTeamId && !isExt) {
       byTeams.set(teamPairKey(data.phase, data.homeTeamId, data.awayTeamId), d.id);
     }
+    if (data.isFinished) finishedDocIds.add(d.id);
   });
-  return { byApiId, byTeams };
+  return { byApiId, byTeams, finishedDocIds };
 }
 
 // Choisit le doc à mettre à jour, et signale un éventuel doublon ext_* à
@@ -227,14 +232,14 @@ function buildMatchDoc(
 
 // ─── Public sync functions ──────────────────────────────────────────────────
 
-export async function syncMatchesWC2026(): Promise<{ synced: number; errors: number; provider: string }> {
+export async function syncMatchesWC2026(): Promise<{ synced: number; errors: number; skipped: number; provider: string }> {
   const raw = await fetchWC2026("/matches");
   const list: WC2026Match[] = Array.isArray(raw) ? raw : (raw as { matches: WC2026Match[] }).matches ?? [];
 
   const adminDb = getAdminDb();
   const index = await getExistingMatchIndex();
   const batch = adminDb.batch();
-  let synced = 0, errors = 0;
+  let synced = 0, errors = 0, skipped = 0;
 
   for (const m of list) {
     try {
@@ -252,6 +257,8 @@ export async function syncMatchesWC2026(): Promise<{ synced: number; errors: num
         String(m.id)
       );
       const { docId, staleExtDocId } = findExistingDoc(index, String(m.id), phase, home.id, away.id);
+      // Match déjà terminé en base : on n'y touche pas (résultat figé).
+      if (docId && index.finishedDocIds.has(docId)) { skipped++; continue; }
       if (docId) {
         batch.update(adminDb.collection("matches").doc(docId), pruneForUpdate(data));
       } else {
@@ -262,7 +269,7 @@ export async function syncMatchesWC2026(): Promise<{ synced: number; errors: num
     } catch { errors++; }
   }
   await batch.commit();
-  return { synced, errors, provider: "wc2026api.com" };
+  return { synced, errors, skipped, provider: "wc2026api.com" };
 }
 
 export interface ScoreSyncResult {
@@ -301,12 +308,12 @@ export async function syncScoresWC2026(): Promise<ScoreSyncResult> {
   return { updated, provider: "wc2026api.com", seen: list.length, statuses };
 }
 
-export async function syncMatchesApiFootball(): Promise<{ synced: number; errors: number; provider: string }> {
+export async function syncMatchesApiFootball(): Promise<{ synced: number; errors: number; skipped: number; provider: string }> {
   const data = await fetchApiFootball("/fixtures?league=1&season=2026");
   const adminDb = getAdminDb();
   const index = await getExistingMatchIndex();
   const batch = adminDb.batch();
-  let synced = 0, errors = 0;
+  let synced = 0, errors = 0, skipped = 0;
 
   for (const f of data.response) {
     try {
@@ -324,6 +331,8 @@ export async function syncMatchesApiFootball(): Promise<{ synced: number; errors
         String(f.fixture.id)
       );
       const { docId, staleExtDocId } = findExistingDoc(index, String(f.fixture.id), phase, home.id, away.id);
+      // Match déjà terminé en base : on n'y touche pas (résultat figé).
+      if (docId && index.finishedDocIds.has(docId)) { skipped++; continue; }
       if (docId) {
         batch.update(adminDb.collection("matches").doc(docId), pruneForUpdate(data2));
       } else {
@@ -334,7 +343,7 @@ export async function syncMatchesApiFootball(): Promise<{ synced: number; errors
     } catch { errors++; }
   }
   await batch.commit();
-  return { synced, errors, provider: "api-football.com" };
+  return { synced, errors, skipped, provider: "api-football.com" };
 }
 
 export async function syncScoresApiFootball(): Promise<ScoreSyncResult> {
