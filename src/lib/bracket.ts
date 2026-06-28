@@ -80,11 +80,22 @@ const COLUMN_ORDER: Record<Round, number[]> = {
   final: [104],
 };
 
+export interface ResolvedTeam {
+  id: string;
+  name: string;
+  code: string;
+}
+
 export interface ResolvedSlot {
   /** Étiquette de position : « 1er I », « 2e B », « 3e A/B/C/D/F », « Vainqueur 73 ». */
   label: string;
-  team: TeamStanding | null;
+  team: ResolvedTeam | null;
+  /** Équipe garantie d'un top-2 de groupe (projection). */
   confirmed: boolean;
+  /** Score réel si le match a été joué. */
+  score: number | null;
+  /** Cette équipe a gagné ce match. */
+  winner: boolean;
 }
 
 export interface ResolvedMatch {
@@ -92,6 +103,11 @@ export interface ResolvedMatch {
   round: Round;
   a: ResolvedSlot;
   b: ResolvedSlot;
+  kickoff: Date | null;
+  finished: boolean;
+  live: boolean;
+  /** Un vrai match Firestore alimente cette position (les 2 équipes sont connues). */
+  real: boolean;
 }
 
 export interface ResolvedBracket {
@@ -138,30 +154,55 @@ function assignThirds(thirds: TeamStanding[]): Map<number, TeamStanding> {
   return result;
 }
 
+function matchWinnerId(real: Match): string | null {
+  if (real.qualifiedTeamId) return real.qualifiedTeamId;
+  if (real.homeScore == null || real.awayScore == null) return null;
+  if (real.homeScore > real.awayScore) return real.homeTeamId;
+  if (real.awayScore > real.homeScore) return real.awayTeamId;
+  return null;
+}
+
 export function resolveBracket(matches: Match[]): ResolvedBracket {
   const standings = computeStandings(matches);
   const { bestThirds, confirmedIds } = projectQualifiers(standings);
 
-  const winnerOf = (g: string) => standings.get(g)?.[0] ?? null;
-  const runnerOf = (g: string) => standings.get(g)?.[1] ?? null;
-  const thirdByMatch = assignThirds(bestThirds);
+  const winnerOf = (g: string) => standings.get(g)?.[0]?.team ?? null;
+  const runnerOf = (g: string) => standings.get(g)?.[1]?.team ?? null;
+  const thirdByMatch = assignThirds(bestThirds); // projection (fallback uniquement)
 
-  const resolveSlot = (no: number, slot: Slot): ResolvedSlot => {
+  // Vrais matchs à élimination directe : la donnée réelle fait autorité sur la
+  // projection. On les indexe par (tour, équipe) — une équipe ne joue qu'un match
+  // par tour — et on note les équipes déjà placées pour ne pas les reprojeter.
+  const realByRoundTeam = new Map<string, Match>();
+  const placedByRound = new Map<Round, Set<string>>(ROUND_ORDER.map((r) => [r, new Set<string>()]));
+  for (const m of matches) {
+    if (m.phase === "group") continue;
+    const round = m.phase as Round;
+    realByRoundTeam.set(`${round}|${m.homeTeamId}`, m);
+    realByRoundTeam.set(`${round}|${m.awayTeamId}`, m);
+    placedByRound.get(round)?.add(m.homeTeamId).add(m.awayTeamId);
+  }
+
+  // Vainqueur résolu de chaque match, propagé vers les positions « feed » suivantes.
+  const winners = new Map<number, ResolvedTeam>();
+
+  // Équipe « déterminée » d'un slot (sans projeter les 3es : ils viennent du réel).
+  const detSlot = (
+    slot: Slot
+  ): { team: ResolvedTeam | null; label: string; confirmed: boolean } => {
     switch (slot.kind) {
       case "winner": {
-        const team = winnerOf(slot.group);
-        return { label: `1er ${slot.group}`, team, confirmed: !!team && confirmedIds.has(team.team.id) };
+        const t = winnerOf(slot.group);
+        return { team: t, label: `1er ${slot.group}`, confirmed: !!t && confirmedIds.has(t.id) };
       }
       case "runnerup": {
-        const team = runnerOf(slot.group);
-        return { label: `2e ${slot.group}`, team, confirmed: !!team && confirmedIds.has(team.team.id) };
+        const t = runnerOf(slot.group);
+        return { team: t, label: `2e ${slot.group}`, confirmed: !!t && confirmedIds.has(t.id) };
       }
-      case "third": {
-        const team = thirdByMatch.get(no) ?? null;
-        return { label: `3e ${slot.groups.join("/")}`, team, confirmed: false };
-      }
+      case "third":
+        return { team: null, label: `3e ${slot.groups.join("/")}`, confirmed: false };
       case "feed":
-        return { label: `Vainqueur ${slot.match}`, team: null, confirmed: false };
+        return { team: winners.get(slot.match) ?? null, label: `Vainqueur ${slot.match}`, confirmed: false };
     }
   };
 
@@ -169,14 +210,82 @@ export function resolveBracket(matches: Match[]): ResolvedBracket {
   const columns = {} as Record<Round, ResolvedMatch[]>;
   let projectedTeams = 0;
 
+  // ROUND_ORDER est croissant (r32 → finale), donc les vainqueurs d'un tour sont
+  // connus avant de résoudre le suivant.
   for (const round of ROUND_ORDER) {
     columns[round] = COLUMN_ORDER[round].map((no) => {
       const def = byNo.get(no)!;
-      const a = resolveSlot(no, def.a);
-      const b = resolveSlot(no, def.b);
-      if (a.team) projectedTeams++;
-      if (b.team) projectedTeams++;
-      return { no, round, a, b };
+      const A = detSlot(def.a);
+      const B = detSlot(def.b);
+
+      // Le vrai match se trouve via l'équipe déterminée (1er/2e/vainqueur),
+      // jamais via le 3e projeté qui peut être faux.
+      const real =
+        (A.team && realByRoundTeam.get(`${round}|${A.team.id}`)) ||
+        (B.team && realByRoundTeam.get(`${round}|${B.team.id}`)) ||
+        null;
+
+      let aTeam = A.team;
+      let bTeam = B.team;
+      let aScore: number | null = null;
+      let bScore: number | null = null;
+      let kickoff: Date | null = null;
+      let finished = false;
+      let live = false;
+      let winnerId: string | null = null;
+
+      if (real) {
+        kickoff = real.kickoffUtc;
+        finished = real.isFinished;
+        live = real.status === "live";
+        // L'équipe déterminée garde sa place, le vrai adversaire remplit l'autre.
+        if (A.team) {
+          aTeam = A.team;
+          bTeam = real.homeTeamId === A.team.id ? real.awayTeam : real.homeTeam;
+        } else if (B.team) {
+          bTeam = B.team;
+          aTeam = real.homeTeamId === B.team.id ? real.awayTeam : real.homeTeam;
+        } else {
+          aTeam = real.homeTeam;
+          bTeam = real.awayTeam;
+        }
+        const aIsHome = real.homeTeamId === aTeam?.id;
+        aScore = aIsHome ? real.homeScore : real.awayScore;
+        bScore = aIsHome ? real.awayScore : real.homeScore;
+        if (finished) {
+          winnerId = matchWinnerId(real);
+          const wt = winnerId === aTeam?.id ? aTeam : winnerId === bTeam?.id ? bTeam : null;
+          if (wt) winners.set(no, wt);
+        }
+      } else {
+        // Pas de vrai match : on projette les 3es, sauf si l'équipe est déjà
+        // placée ailleurs en réel (on évite de l'afficher deux fois).
+        const placed = placedByRound.get(round)!;
+        if (!aTeam && def.a.kind === "third") {
+          const p = thirdByMatch.get(no)?.team ?? null;
+          aTeam = p && !placed.has(p.id) ? p : null;
+        }
+        if (!bTeam && def.b.kind === "third") {
+          const p = thirdByMatch.get(no)?.team ?? null;
+          bTeam = p && !placed.has(p.id) ? p : null;
+        }
+      }
+
+      if (round === "r32") {
+        if (aTeam) projectedTeams++;
+        if (bTeam) projectedTeams++;
+      }
+
+      return {
+        no,
+        round,
+        a: { label: A.label, team: aTeam, confirmed: A.confirmed && !!aTeam, score: aScore, winner: finished && winnerId === aTeam?.id },
+        b: { label: B.label, team: bTeam, confirmed: B.confirmed && !!bTeam, score: bScore, winner: finished && winnerId === bTeam?.id },
+        kickoff,
+        finished,
+        live,
+        real: !!real,
+      };
     });
   }
 

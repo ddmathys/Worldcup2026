@@ -12,74 +12,37 @@ import { fr } from "date-fns/locale";
 import { Loader2, Sparkles, CheckCircle2, Info } from "lucide-react";
 import clsx from "clsx";
 
-const PHASES: { key: Match["phase"]; label: string }[] = [
-  { key: "r32", label: "Tour préliminaire" },
-  { key: "r16", label: "Huitièmes de finale" },
-  { key: "qf", label: "Quarts de finale" },
-  { key: "sf", label: "Demi-finales" },
-  { key: "final", label: "Finale" },
-];
-
-// ── Carte de match « données réelles » (vue par phase) ───────────────────────
-function BracketMatch({ match }: { match: Match }) {
-  const isFinished = match.isFinished;
-  const winner = match.qualifiedTeamId
-    ? match.homeTeam.id === match.qualifiedTeamId
-      ? match.homeTeam
-      : match.awayTeam
-    : null;
-
-  return (
-    <div className="glass rounded-xl overflow-hidden w-52 min-w-[13rem]">
-      {[match.homeTeam, match.awayTeam].map((team, ti) => {
-        const score = ti === 0 ? match.homeScore : match.awayScore;
-        const isWinner = winner?.id === team.id;
-        return (
-          <div
-            key={team.id}
-            className={clsx(
-              "flex items-center gap-2.5 px-3 py-2.5 transition-colors",
-              ti === 0 && "border-b border-white/8",
-              isFinished && isWinner && "bg-yellow-400/10",
-              isFinished && !isWinner && "opacity-50"
-            )}
-          >
-            <FlagImage code={team.code} name={team.name} size={24} />
-            <span className={clsx("flex-1 text-sm font-semibold truncate", isWinner ? "text-yellow-400" : "text-white")}>
-              {team.name}
-            </span>
-            {isFinished && score !== null && (
-              <span className={clsx("text-sm font-black", isWinner ? "text-yellow-400" : "text-white/40")}>
-                {score}
-              </span>
-            )}
-          </div>
-        );
-      })}
-      <div className="px-3 py-1.5 border-t border-white/8 text-xs text-white/30">
-        {format(match.kickoffUtc, "d MMM · HH:mm", { locale: fr })}
-      </div>
-    </div>
-  );
-}
-
-// ── Arbre projeté (pas encore de données d'élimination) ──────────────────────
-
+// ── Ligne d'équipe (slot) ────────────────────────────────────────────────────
 function SlotRow({ slot, border }: { slot: ResolvedSlot; border?: boolean }) {
   return (
     <div
       className={clsx(
-        "flex items-center gap-2 px-2.5 py-1.5 h-9",
+        "flex items-center gap-2 px-2.5 h-9",
         border && "border-b border-white/8",
-        slot.confirmed && "bg-emerald-500/10"
+        slot.winner && "bg-yellow-400/10",
+        slot.confirmed && !slot.winner && "bg-emerald-500/10"
       )}
     >
       {slot.team ? (
         <>
-          <FlagImage code={slot.team.team.code} name={slot.team.team.name} size={18} />
-          <span className="flex-1 text-[13px] font-semibold text-white truncate">{slot.team.team.name}</span>
-          {slot.confirmed && <CheckCircle2 size={12} className="text-emerald-400 flex-shrink-0" />}
-          <span className="text-[9px] font-bold text-white/30">{slot.label}</span>
+          <FlagImage code={slot.team.code} name={slot.team.name} size={18} />
+          <span
+            className={clsx(
+              "flex-1 text-[13px] font-semibold truncate",
+              slot.winner ? "text-yellow-400" : slot.score != null && !slot.winner ? "text-white/40" : "text-white"
+            )}
+          >
+            {slot.team.name}
+          </span>
+          {slot.score != null ? (
+            <span className={clsx("text-[13px] font-black w-4 text-center", slot.winner ? "text-yellow-400" : "text-white/40")}>
+              {slot.score}
+            </span>
+          ) : slot.confirmed ? (
+            <CheckCircle2 size={12} className="text-emerald-400 flex-shrink-0" />
+          ) : (
+            <span className="text-[9px] font-bold text-white/30">{slot.label}</span>
+          )}
         </>
       ) : (
         <span className="flex-1 text-[11px] font-medium text-white/35 truncate">{slot.label}</span>
@@ -91,9 +54,21 @@ function SlotRow({ slot, border }: { slot: ResolvedSlot; border?: boolean }) {
 function BracketCard({ match }: { match: ResolvedMatch }) {
   return (
     <div className="relative">
-      <div className="glass rounded-lg overflow-hidden w-44 sm:w-48">
+      <div className={clsx("glass rounded-lg overflow-hidden w-44 sm:w-48", match.live && "border-blue-500/40")}>
         <SlotRow slot={match.a} border />
         <SlotRow slot={match.b} />
+        {(match.kickoff || match.live) && (
+          <div className="px-2.5 py-1 border-t border-white/8 text-[10px] flex items-center justify-between">
+            <span className="text-white/30">
+              {match.kickoff ? format(match.kickoff, "d MMM · HH:mm", { locale: fr }) : ""}
+            </span>
+            {match.live ? (
+              <span className="text-blue-400 font-bold uppercase tracking-wide">live</span>
+            ) : match.finished ? (
+              <span className="text-white/40 font-semibold">terminé</span>
+            ) : null}
+          </div>
+        )}
       </div>
       <span className="absolute -top-2 left-2 text-[8px] font-black text-white/25 bg-navy px-1 rounded">
         M{match.no}
@@ -127,8 +102,8 @@ function BracketTree({ matches }: { matches: Match[] }) {
       </div>
 
       <p className="text-center text-xs text-white/30 mt-4">
-        {projectedTeams} / 32 équipes positionnées · projection d&apos;après les classements actuels, susceptible de
-        changer après la 3e journée. Les affiches « 1er vs 3e » dépendent des 8 meilleurs 3es.
+        {projectedTeams} / 32 équipes positionnées · scores réels affichés au fil des matchs, le reste est projeté
+        d&apos;après les classements (les affiches « 1er vs 3e » dépendent des 8 meilleurs 3es).
       </p>
     </>
   );
@@ -137,7 +112,6 @@ function BracketTree({ matches }: { matches: Match[] }) {
 export default function BracketPage() {
   const [matches, setMatches] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activePhase, setActivePhase] = useState<Match["phase"]>("r16");
 
   useEffect(() => {
     const unsub = subscribeMatches((m) => {
@@ -147,31 +121,20 @@ export default function BracketPage() {
     return unsub;
   }, []);
 
-  const knockoutMatches = matches.filter((m) => m.phase !== "group");
-  const hasKnockoutData = knockoutMatches.length > 0;
-
-  const phases = PHASES.filter((p) => knockoutMatches.some((m) => m.phase === p.key));
-  // Si la phase active n'a aucun match (ex. juste après la création des 16es,
-  // les tours suivants n'existent pas encore), on retombe sur la 1re disponible.
-  const effectivePhase = phases.some((p) => p.key === activePhase)
-    ? activePhase
-    : phases[0]?.key ?? activePhase;
-  const phaseMatches = knockoutMatches.filter((m) => m.phase === effectivePhase);
-
-  const confirmedCount = useMemo(() => {
-    if (hasKnockoutData) return 0;
-    return resolveBracket(matches).confirmedCount;
-  }, [matches, hasKnockoutData]);
+  const { confirmedCount, hasKnockout } = useMemo(() => {
+    const r = resolveBracket(matches);
+    return { confirmedCount: r.confirmedCount, hasKnockout: matches.some((m) => m.phase !== "group") };
+  }, [matches]);
 
   const groupStarted = matches.some((m) => m.phase === "group");
-  const showProjection = !loading && !hasKnockoutData && groupStarted;
+  const showBracket = !loading && groupStarted;
 
   return (
     <div className="min-h-screen bg-navy">
       <Navigation />
 
-      {/* Bandeau — affiché tant que le vrai tableau n'existe pas encore */}
-      {showProjection && (
+      {/* Bandeau d'info — tableau en direct */}
+      {showBracket && (
         <motion.div
           initial={{ opacity: 0, y: -12 }}
           animate={{ opacity: 1, y: 0 }}
@@ -180,21 +143,21 @@ export default function BracketPage() {
           <div className="max-w-6xl mx-auto px-4 py-2.5 flex items-center gap-2.5">
             <Sparkles size={15} className="text-purple-300 flex-shrink-0" />
             <p className="text-xs sm:text-sm font-semibold text-white/90">
-              Tableau projeté en direct
-              {confirmedCount > 0 && (
+              {hasKnockout ? "Tableau en direct" : "Tableau projeté en direct"}
+              {!hasKnockout && confirmedCount > 0 && (
                 <span className="text-purple-200">
                   {" "}— {confirmedCount} équipe{confirmedCount > 1 ? "s" : ""} déjà qualifiée{confirmedCount > 1 ? "s" : ""}
                 </span>
               )}
             </p>
             <span className="ml-auto hidden sm:flex items-center gap-1 text-[11px] text-white/50">
-              <Info size={11} /> d&apos;après les classements actuels
+              <Info size={11} /> scores réels + projection
             </span>
           </div>
         </motion.div>
       )}
 
-      <div className={clsx("max-w-6xl mx-auto px-4 pb-16", showProjection ? "pt-32" : "pt-24")}>
+      <div className={clsx("max-w-6xl mx-auto px-4 pb-16", showBracket ? "pt-32" : "pt-24")}>
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -203,9 +166,7 @@ export default function BracketPage() {
           <h1 className="text-4xl font-black text-white mb-2">
             Tableau <span className="text-gold">final</span>
           </h1>
-          <p className="text-white/50 text-sm">
-            {showProjection ? "Arborescence complète · qui affronte qui (projection)" : "Phase à élimination directe"}
-          </p>
+          <p className="text-white/50 text-sm">Arborescence complète · qui affronte qui, du tour préliminaire à la finale</p>
         </motion.div>
 
         {loading ? (
@@ -213,43 +174,6 @@ export default function BracketPage() {
             <Loader2 className="animate-spin text-yellow-400" size={32} />
             <p className="text-white/40">Chargement du tableau…</p>
           </div>
-        ) : hasKnockoutData ? (
-          <>
-            {/* Phase tabs (données réelles) */}
-            <div className="flex flex-wrap justify-center gap-2 mb-10">
-              {phases.map(({ key, label }) => (
-                <button
-                  key={key}
-                  onClick={() => setActivePhase(key)}
-                  className={clsx(
-                    "px-4 py-2 rounded-xl text-sm font-semibold transition-all",
-                    effectivePhase === key
-                      ? "bg-yellow-400/20 text-yellow-400 border border-yellow-400/30"
-                      : "glass text-white/50 hover:text-white"
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex flex-wrap justify-center gap-4">
-              {phaseMatches.length === 0 ? (
-                <p className="text-white/30 text-sm">Aucun match pour cette phase.</p>
-              ) : (
-                phaseMatches.map((m, i) => (
-                  <motion.div
-                    key={m.id}
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: i * 0.06 }}
-                  >
-                    <BracketMatch match={m} />
-                  </motion.div>
-                ))
-              )}
-            </div>
-          </>
         ) : groupStarted ? (
           <BracketTree matches={matches} />
         ) : (
