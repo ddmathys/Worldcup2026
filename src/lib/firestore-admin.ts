@@ -41,7 +41,13 @@ export async function recalculateAllPointsAdmin(): Promise<void> {
       pred.predictedHomeScore as number | null,
       pred.predictedAwayScore as number | null,
       match.homeScore as number | null,
-      match.awayScore as number | null
+      match.awayScore as number | null,
+      {
+        homeTeamId: match.homeTeamId as string,
+        awayTeamId: match.awayTeamId as string,
+        predictedQualifiedTeamId: (pred.predictedQualifiedTeamId as string | null) ?? null,
+        actualQualifiedTeamId: (match.qualifiedTeamId as string | null) ?? null,
+      }
     );
 
     batch.update(db.collection("predictions").doc(predDoc.id), { pointsAwarded: points });
