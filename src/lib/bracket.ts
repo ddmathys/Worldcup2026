@@ -154,6 +154,34 @@ function assignThirds(thirds: TeamStanding[]): Map<number, TeamStanding> {
   return result;
 }
 
+// Table officielle FIFA d'affectation des 3es (495 combinaisons selon les 8
+// groupes qualifiés). Le couplage bipartite ci-dessus donne UNE solution valide
+// mais pas forcément celle de la FIFA, d'où cette table pour les combinaisons
+// rencontrées. Clé = groupes des 8 meilleurs 3es triés ; valeur = n° de match → groupe du 3e.
+// Source : Wikipédia « 2026 FIFA World Cup knockout stage », recoupée avec les
+// affiches réelles (Allemagne-Paraguay, France-Suède, Mexique-Équateur, USA-Bosnie, Suisse-Algérie).
+const OFFICIAL_THIRD_ALLOCATION: Record<string, Record<number, string>> = {
+  BDEFIJKL: { 74: "D", 77: "F", 79: "E", 80: "K", 81: "B", 82: "I", 85: "J", 87: "L" },
+};
+
+function allocateThirds(thirds: TeamStanding[]): Map<number, TeamStanding> {
+  const key = thirds
+    .map((t) => t.groupCode)
+    .sort()
+    .join("");
+  const official = OFFICIAL_THIRD_ALLOCATION[key];
+  if (official) {
+    const byGroup = new Map(thirds.map((t) => [t.groupCode, t]));
+    const result = new Map<number, TeamStanding>();
+    for (const [no, g] of Object.entries(official)) {
+      const t = byGroup.get(g);
+      if (t) result.set(Number(no), t);
+    }
+    return result;
+  }
+  return assignThirds(thirds);
+}
+
 function matchWinnerId(real: Match): string | null {
   if (real.qualifiedTeamId) return real.qualifiedTeamId;
   if (real.homeScore == null || real.awayScore == null) return null;
@@ -168,7 +196,7 @@ export function resolveBracket(matches: Match[]): ResolvedBracket {
 
   const winnerOf = (g: string) => standings.get(g)?.[0]?.team ?? null;
   const runnerOf = (g: string) => standings.get(g)?.[1]?.team ?? null;
-  const thirdByMatch = assignThirds(bestThirds); // projection (fallback uniquement)
+  const thirdByMatch = allocateThirds(bestThirds); // table officielle si connue, sinon bipartite
 
   // Vrais matchs à élimination directe : la donnée réelle fait autorité sur la
   // projection. On les indexe par (tour, équipe) — une équipe ne joue qu'un match

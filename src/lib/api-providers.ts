@@ -1,7 +1,9 @@
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
+import type { DocumentData } from "firebase-admin/firestore";
 import { getAdminAuth } from "./firebase-admin";
 import { getApps } from "firebase-admin/app";
 import { WC2026_TEAMS } from "./seed-data";
+import { resolveBracket, ROUND_ORDER, type ResolvedMatch } from "./bracket";
 import type { Match, Team } from "@/types";
 
 function getAdminDb() {
@@ -73,10 +75,13 @@ function mapStatus(s: string): Match["status"] {
 // ─── wc2026api.com ─────────────────────────────────────────────────────────
 interface WC2026Match {
   id: number;
+  /** Numéro de match FIFA officiel (73→104 en phase finale), sert à résoudre les
+   *  équipes manquantes via le tableau quand le provider ne les a pas encore. */
+  match_number?: number;
   round: string;
   group_name?: string;
-  home_team: string;
-  away_team: string;
+  home_team: string | null;
+  away_team: string | null;
   stadium?: string;
   city?: string;
   kickoff_utc: string;
@@ -140,6 +145,32 @@ interface MatchIndex {
   // Docs déjà terminés en base : leur résultat est figé, la sync calendrier ne
   // doit jamais les réécrire (garantie « aucune régression »).
   finishedDocIds: Set<string>;
+  // Tous les matchs existants (servent à résoudre le tableau côté serveur).
+  allMatches: Match[];
+}
+
+function docToMatch(id: string, d: DocumentData): Match {
+  const toDate = (ts: { toDate?: () => Date } | undefined) =>
+    ts?.toDate ? ts.toDate() : new Date();
+  return {
+    id,
+    apiMatchId: d.apiMatchId,
+    phase: d.phase,
+    groupCode: d.groupCode,
+    homeTeamId: d.homeTeamId,
+    awayTeamId: d.awayTeamId,
+    homeTeam: d.homeTeam,
+    awayTeam: d.awayTeam,
+    stadiumName: d.stadiumName ?? "",
+    city: d.city ?? "",
+    kickoffUtc: toDate(d.kickoffUtc),
+    lockAtUtc: toDate(d.lockAtUtc),
+    status: d.status,
+    homeScore: d.homeScore ?? null,
+    awayScore: d.awayScore ?? null,
+    qualifiedTeamId: d.qualifiedTeamId ?? null,
+    isFinished: d.isFinished ?? false,
+  };
 }
 
 // Un doc avec une équipe ext_* vient d'un échec de mapping de nom : il n'est
@@ -150,6 +181,7 @@ async function getExistingMatchIndex(): Promise<MatchIndex> {
   const byApiId = new Map<string, { docId: string; isExt: boolean }>();
   const byTeams = new Map<string, string>();
   const finishedDocIds = new Set<string>();
+  const allMatches: Match[] = [];
   snap.docs.forEach((d) => {
     const data = d.data();
     const isExt =
@@ -160,8 +192,9 @@ async function getExistingMatchIndex(): Promise<MatchIndex> {
       byTeams.set(teamPairKey(data.phase, data.homeTeamId, data.awayTeamId), d.id);
     }
     if (data.isFinished) finishedDocIds.add(d.id);
+    allMatches.push(docToMatch(d.id, data));
   });
-  return { byApiId, byTeams, finishedDocIds };
+  return { byApiId, byTeams, finishedDocIds, allMatches };
 }
 
 // Choisit le doc à mettre à jour, et signale un éventuel doublon ext_* à
@@ -241,12 +274,42 @@ export async function syncMatchesWC2026(): Promise<{ synced: number; errors: num
   const batch = adminDb.batch();
   let synced = 0, errors = 0, skipped = 0;
 
+  // Résolution du tableau côté serveur : quand le provider ne connaît pas encore
+  // l'adversaire d'un match à élimination directe (3e à placer, ou tour non
+  // encore renseigné), on le déduit du classement + tableau officiel via le n°
+  // de match FIFA. Les scores se synchroniseront ensuite par apiMatchId.
+  const resolved = resolveBracket(index.allMatches);
+  const byNo = new Map<number, ResolvedMatch>();
+  for (const round of ROUND_ORDER) for (const rm of resolved.columns[round]) byNo.set(rm.no, rm);
+  const asTeam = (t: { id: string; name: string; code: string }): Team => ({ id: t.id, name: t.name, code: t.code });
+
   for (const m of list) {
     try {
-      const home = teamByName(m.home_team);
-      const away = teamByName(m.away_team);
-      const kickoff = new Date(m.kickoff_utc);
       const phase = mapPhase(m.round);
+      let home: Team;
+      let away: Team;
+      if (phase !== "group" && (!m.home_team || !m.away_team)) {
+        const rm = m.match_number != null ? byNo.get(m.match_number) : undefined;
+        if (!rm || !rm.a.team || !rm.b.team) { errors++; continue; }
+        const ta = asTeam(rm.a.team);
+        const tb = asTeam(rm.b.team);
+        // On garde l'équipe déjà connue côté provider à sa place (l'orientation
+        // home/away doit coïncider pour que la sync des scores reste correcte).
+        if (m.home_team) {
+          home = teamByName(m.home_team);
+          away = home.id === ta.id ? tb : ta;
+        } else if (m.away_team) {
+          away = teamByName(m.away_team);
+          home = away.id === ta.id ? tb : ta;
+        } else {
+          home = ta;
+          away = tb;
+        }
+      } else {
+        home = teamByName(m.home_team!);
+        away = teamByName(m.away_team!);
+      }
+      const kickoff = new Date(m.kickoff_utc);
       const data = buildMatchDoc(
         home, away, kickoff,
         phase,
