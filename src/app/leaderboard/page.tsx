@@ -189,34 +189,29 @@ export default function LeaderboardPage() {
               </motion.div>
             )}
 
-            {/* Full table */}
-            <div className="glass rounded-2xl overflow-hidden">
-              <table className="w-full">
+            {/* Full table — défilable horizontalement sur petit écran */}
+            <div className="glass rounded-2xl overflow-x-auto">
+              <table className="w-full min-w-[620px]">
                 <thead>
                   <tr className="border-b border-white/8 text-xs font-semibold text-white/40 uppercase tracking-wider">
                     <th className="text-left px-4 py-3 w-12">#</th>
                     <th className="text-left px-4 py-3">Participant</th>
-                    <th className="text-center px-3 py-3 hidden sm:table-cell">
-                      <span className="flex items-center justify-center gap-1">
-                        <Star size={11} /> Exacts
-                      </span>
-                    </th>
-                    <th className="text-center px-3 py-3 hidden sm:table-cell">
-                      <span className="flex items-center justify-center gap-1">
-                        <Target size={11} /> Vainqueurs
-                      </span>
-                    </th>
-                    <th className="text-center px-3 py-3 hidden md:table-cell">
-                      <span className="flex items-center justify-center gap-1">
-                        <ListChecks size={11} /> Pronos
-                      </span>
-                    </th>
+                    <th className="text-center px-3 py-3">Points</th>
                     <th className="text-center px-3 py-3" title="Points obtenus sur le dernier match terminé">
                       <span className="flex items-center justify-center gap-1">
                         <Flame size={11} /> Dernier match
                       </span>
                     </th>
-                    <th className="text-right px-4 py-3">Points</th>
+                    <th className="text-center px-3 py-3">
+                      <span className="flex items-center justify-center gap-1">
+                        <ListChecks size={11} /> Pronos
+                      </span>
+                    </th>
+                    <th className="text-center px-3 py-3" title="Scores exacts / bons vainqueurs">
+                      <span className="flex items-center justify-center gap-1">
+                        <Star size={11} /> Exacts <span className="opacity-40">/</span> <Target size={11} /> Vainq.
+                      </span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -248,7 +243,7 @@ export default function LeaderboardPage() {
                         <td className="px-4 py-3.5">
                           <span
                             className={clsx(
-                              "font-semibold",
+                              "font-semibold whitespace-nowrap",
                               isMe ? "text-yellow-400" : "text-white"
                             )}
                           >
@@ -260,20 +255,14 @@ export default function LeaderboardPage() {
                             )}
                           </span>
                         </td>
-                        <td className="text-center px-3 py-3.5 text-sm text-white/50 hidden sm:table-cell">
-                          {u.exactScoresCount}
-                        </td>
-                        <td className="text-center px-3 py-3.5 text-sm text-white/50 hidden sm:table-cell">
-                          {u.correctWinnerCount}
-                        </td>
-                        <td className="text-center px-3 py-3.5 text-sm hidden md:table-cell">
-                          <span className={clsx(
-                            "font-mono",
-                            u.predictionsCount === totalMatches && totalMatches > 0
-                              ? "text-green-400"
-                              : "text-white/50"
-                          )}>
-                            {u.predictionsCount}/{totalMatches}
+                        <td className="text-center px-3 py-3.5">
+                          <span
+                            className={clsx(
+                              "text-lg font-black",
+                              rank === 1 ? "text-yellow-400" : isMe ? "text-yellow-400" : "text-white"
+                            )}
+                          >
+                            {u.totalPoints}
                           </span>
                         </td>
                         <td className="text-center px-3 py-3.5 text-sm">
@@ -290,14 +279,26 @@ export default function LeaderboardPage() {
                             </span>
                           )}
                         </td>
-                        <td className="text-right px-4 py-3.5">
-                          <span
-                            className={clsx(
-                              "text-lg font-black",
-                              rank === 1 ? "text-yellow-400" : isMe ? "text-yellow-400" : "text-white"
-                            )}
-                          >
-                            {u.totalPoints}
+                        <td className="text-center px-3 py-3.5 text-sm">
+                          <span className={clsx(
+                            "font-mono",
+                            u.predictionsCount === totalMatches && totalMatches > 0
+                              ? "text-green-400"
+                              : "text-white/50"
+                          )}>
+                            {u.predictionsCount}/{totalMatches}
+                          </span>
+                        </td>
+                        <td className="text-center px-3 py-3.5 text-sm">
+                          <span className="inline-flex items-center gap-2.5 text-white/55 whitespace-nowrap">
+                            <span className="inline-flex items-center gap-1">
+                              <Star size={11} className="text-yellow-400/70" />
+                              {u.exactScoresCount}
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <Target size={11} className="text-emerald-400/70" />
+                              {u.correctWinnerCount}
+                            </span>
                           </span>
                         </td>
                       </motion.tr>
