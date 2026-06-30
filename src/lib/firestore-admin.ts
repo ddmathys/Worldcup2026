@@ -18,10 +18,21 @@ export async function recalculateAllPointsAdmin(): Promise<void> {
   ]);
 
   const matches = new Map(matchesSnap.docs.map((d) => [d.id, d.data()]));
-  const userPoints = new Map<string, { total: number; exact: number; winner: number; predictions: number }>();
+
+  // Dernier match terminé (coup d'envoi le plus récent parmi les isFinished).
+  let lastMatchId: string | null = null;
+  let lastKickoff = -Infinity;
+  matchesSnap.docs.forEach((d) => {
+    const data = d.data();
+    if (!data.isFinished) return;
+    const k = data.kickoffUtc?.toMillis?.() ?? data.kickoffUtc?.toDate?.()?.getTime?.() ?? 0;
+    if (k > lastKickoff) { lastKickoff = k; lastMatchId = d.id; }
+  });
+
+  const userPoints = new Map<string, { total: number; exact: number; winner: number; predictions: number; lastMatchPoints: number | null }>();
 
   usersSnap.docs.forEach((d) => {
-    userPoints.set(d.id, { total: 0, exact: 0, winner: 0, predictions: 0 });
+    userPoints.set(d.id, { total: 0, exact: 0, winner: 0, predictions: 0, lastMatchPoints: null });
   });
 
   const BATCH_SIZE = 400;
@@ -57,6 +68,7 @@ export async function recalculateAllPointsAdmin(): Promise<void> {
       u.total += points;
       if (exact) u.exact += 1;
       else if (correct) u.winner += 1;
+      if (pred.matchId === lastMatchId) u.lastMatchPoints = points;
     }
 
     if (ops >= BATCH_SIZE) {
@@ -72,6 +84,7 @@ export async function recalculateAllPointsAdmin(): Promise<void> {
       exactScoresCount: pts.exact,
       correctWinnerCount: pts.winner,
       predictionsCount: pts.predictions,
+      lastMatchPoints: pts.lastMatchPoints,
       updatedAt: FieldValue.serverTimestamp(),
     });
     ops++;
@@ -104,6 +117,7 @@ export async function getAllUsersAdmin(): Promise<UserProfile[]> {
         exactScoresCount: (data.exactScoresCount as number) ?? 0,
         correctWinnerCount: (data.correctWinnerCount as number) ?? 0,
         predictionsCount: (data.predictionsCount as number) ?? 0,
+        lastMatchPoints: (data.lastMatchPoints as number | null) ?? null,
         createdAt: data.createdAt?.toDate?.() ?? new Date(),
         updatedAt: data.updatedAt?.toDate?.() ?? new Date(),
       };

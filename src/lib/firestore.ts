@@ -39,6 +39,7 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
     exactScoresCount: d.exactScoresCount ?? 0,
     correctWinnerCount: d.correctWinnerCount ?? 0,
     predictionsCount: d.predictionsCount ?? 0,
+    lastMatchPoints: d.lastMatchPoints ?? null,
     createdAt: fromTimestamp(d.createdAt),
     updatedAt: fromTimestamp(d.updatedAt),
   };
@@ -84,6 +85,7 @@ export function subscribeLeaderboard(
             exactScoresCount: data.exactScoresCount ?? 0,
             correctWinnerCount: data.correctWinnerCount ?? 0,
             predictionsCount: data.predictionsCount ?? 0,
+            lastMatchPoints: data.lastMatchPoints ?? null,
             createdAt: fromTimestamp(data.createdAt),
             updatedAt: fromTimestamp(data.updatedAt),
           } as UserProfile;
@@ -292,13 +294,23 @@ export async function recalculateAllPoints(): Promise<void> {
   ]);
 
   const matches = new Map(matchesSnap.docs.map((d) => [d.id, matchFromDoc(d)]));
+
+  // Dernier match terminé (coup d'envoi le plus récent parmi les isFinished).
+  let lastMatchId: string | null = null;
+  let lastKickoff = -Infinity;
+  matches.forEach((m, id) => {
+    if (!m.isFinished) return;
+    const k = m.kickoffUtc.getTime();
+    if (k > lastKickoff) { lastKickoff = k; lastMatchId = id; }
+  });
+
   const userPoints = new Map<
     string,
-    { total: number; exact: number; winner: number; predictions: number }
+    { total: number; exact: number; winner: number; predictions: number; lastMatchPoints: number | null }
   >();
 
   usersSnap.docs.forEach((d) => {
-    userPoints.set(d.id, { total: 0, exact: 0, winner: 0, predictions: 0 });
+    userPoints.set(d.id, { total: 0, exact: 0, winner: 0, predictions: 0, lastMatchPoints: null });
   });
 
   const batch = writeBatch(db);
@@ -334,6 +346,7 @@ export async function recalculateAllPoints(): Promise<void> {
       u.total += points;
       if (exact) u.exact += 1;
       else if (correct) u.winner += 1;
+      if (pred.matchId === lastMatchId) u.lastMatchPoints = points;
     }
   });
 
@@ -343,6 +356,7 @@ export async function recalculateAllPoints(): Promise<void> {
       exactScoresCount: pts.exact,
       correctWinnerCount: pts.winner,
       predictionsCount: pts.predictions,
+      lastMatchPoints: pts.lastMatchPoints,
       updatedAt: Timestamp.now(),
     });
   });
@@ -433,6 +447,7 @@ export async function getAllUsers(): Promise<UserProfile[]> {
       exactScoresCount: data.exactScoresCount ?? 0,
       correctWinnerCount: data.correctWinnerCount ?? 0,
       predictionsCount: data.predictionsCount ?? 0,
+      lastMatchPoints: data.lastMatchPoints ?? null,
       createdAt: fromTimestamp(data.createdAt),
       updatedAt: fromTimestamp(data.updatedAt),
     } as UserProfile;

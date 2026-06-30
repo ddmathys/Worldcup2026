@@ -52,6 +52,8 @@ export interface UserProfile {
   exactScoresCount: number;
   correctWinnerCount: number;
   predictionsCount: number;
+  /** Points obtenus sur le dernier match terminé (null = pas de prono dessus). */
+  lastMatchPoints: number | null;
   createdAt: Date;
   updatedAt: Date;
 }

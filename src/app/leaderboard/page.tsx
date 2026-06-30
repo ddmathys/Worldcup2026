@@ -5,8 +5,8 @@ import { motion } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
 import Navigation from "@/components/Navigation";
 import { subscribeLeaderboard, getMatches } from "@/lib/firestore";
-import type { UserProfile } from "@/types";
-import { Trophy, Star, Target, Loader2, Medal, ListChecks } from "lucide-react";
+import type { UserProfile, Match } from "@/types";
+import { Trophy, Star, Target, Loader2, Medal, ListChecks, Flame } from "lucide-react";
 import clsx from "clsx";
 
 const PODIUM_CONFIG = [
@@ -19,11 +19,18 @@ export default function LeaderboardPage() {
   const { user, profile } = useAuth();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [totalMatches, setTotalMatches] = useState(0);
+  const [lastMatch, setLastMatch] = useState<Match | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getMatches().then((m) => setTotalMatches(m.length));
+    getMatches().then((m) => {
+      setTotalMatches(m.length);
+      const lastFinished = m
+        .filter((x) => x.isFinished)
+        .sort((a, b) => b.kickoffUtc.getTime() - a.kickoffUtc.getTime())[0];
+      setLastMatch(lastFinished ?? null);
+    });
     const unsub = subscribeLeaderboard(
       (u) => {
         setUsers(u);
@@ -60,6 +67,12 @@ export default function LeaderboardPage() {
           <p className="text-white/50 text-sm">
             {users.length} participant{users.length !== 1 ? "s" : ""} · Mis à jour en temps réel
           </p>
+          {lastMatch && (
+            <p className="text-white/40 text-xs mt-1.5 flex items-center justify-center gap-1.5">
+              <Flame size={11} className="text-orange-400/70" />
+              Dernier match : {lastMatch.homeTeam.name} {lastMatch.homeScore}–{lastMatch.awayScore} {lastMatch.awayTeam.name}
+            </p>
+          )}
         </motion.div>
 
         {loading ? (
@@ -198,6 +211,11 @@ export default function LeaderboardPage() {
                         <ListChecks size={11} /> Pronos
                       </span>
                     </th>
+                    <th className="text-center px-3 py-3" title="Points obtenus sur le dernier match terminé">
+                      <span className="flex items-center justify-center gap-1">
+                        <Flame size={11} /> Dernier match
+                      </span>
+                    </th>
                     <th className="text-right px-4 py-3">Points</th>
                   </tr>
                 </thead>
@@ -257,6 +275,20 @@ export default function LeaderboardPage() {
                           )}>
                             {u.predictionsCount}/{totalMatches}
                           </span>
+                        </td>
+                        <td className="text-center px-3 py-3.5 text-sm">
+                          {u.lastMatchPoints == null ? (
+                            <span className="text-white/25">–</span>
+                          ) : (
+                            <span className={clsx(
+                              "font-bold px-2 py-0.5 rounded-full text-xs",
+                              u.lastMatchPoints > 0
+                                ? "bg-orange-400/15 text-orange-300"
+                                : "bg-white/8 text-white/35"
+                            )}>
+                              +{u.lastMatchPoints}
+                            </span>
+                          )}
                         </td>
                         <td className="text-right px-4 py-3.5">
                           <span

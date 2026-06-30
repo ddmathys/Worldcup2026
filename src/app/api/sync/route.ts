@@ -16,6 +16,9 @@ export async function POST(request: NextRequest) {
       } catch {
         result = await syncMatchesApiFootball();
       }
+      // La sync calendrier peut faire passer un match en isFinished : on recalcule
+      // pour ne pas laisser des pointsAwarded à null (cf. /api/cron/sync-scores).
+      await recalculateAllPointsAdmin();
       return NextResponse.json({ ok: true, ...result });
     }
 

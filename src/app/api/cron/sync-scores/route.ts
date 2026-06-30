@@ -32,6 +32,10 @@ export async function GET(request: Request) {
   });
 
   if (!needsUpdate) {
+    // Aucun match à synchroniser, mais on recalcule quand même : un match a pu
+    // passer isFinished via la sync calendrier (type:"matches"), qui ne déclenche
+    // pas de recalcul — sinon ses pointsAwarded resteraient null indéfiniment.
+    await recalculateAllPointsAdmin();
     return NextResponse.json({ ok: true, skipped: true, reason: "no match in update window" });
   }
 
