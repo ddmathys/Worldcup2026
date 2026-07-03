@@ -173,6 +173,25 @@ export async function updateMatchStatus(
   await updateDoc(doc(db, "matches", matchId), { status });
 }
 
+/**
+ * Force les deux équipes d'un match (usage admin, phases à élimination).
+ * Filet de sécurité si la synchro du calendrier a mal placé une équipe :
+ * met à jour les 4 champs liés pour que le tableau (resolveBracket) et le
+ * scoring (homeTeamId/awayTeamId) restent cohérents.
+ */
+export async function updateMatchTeams(
+  matchId: string,
+  homeTeam: Team,
+  awayTeam: Team
+): Promise<void> {
+  await updateDoc(doc(db, "matches", matchId), {
+    homeTeamId: homeTeam.id,
+    awayTeamId: awayTeam.id,
+    homeTeam,
+    awayTeam,
+  });
+}
+
 export async function seedMatches(matches: Omit<Match, "id">[]): Promise<void> {
   const batch = writeBatch(db);
   matches.forEach((m) => {

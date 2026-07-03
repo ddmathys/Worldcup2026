@@ -9,8 +9,10 @@ import {
   subscribeMatches,
   setMatchResult,
   updateMatchStatus,
+  updateMatchTeams,
   getAllUsers,
 } from "@/lib/firestore";
+import { WC2026_TEAMS } from "@/lib/seed-data";
 import type { Match, UserProfile } from "@/types";
 import FlagImage from "@/components/FlagImage";
 import { format } from "date-fns";
@@ -66,6 +68,10 @@ export default function AdminPage() {
   const [resultInputs, setResultInputs] = useState<
     Record<string, { home: string; away: string; qualified: string }>
   >({});
+  const [teamInputs, setTeamInputs] = useState<
+    Record<string, { home: string; away: string }>
+  >({});
+  const [teamsSaving, setTeamsSaving] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"dashboard" | "matches" | "newsletter" | "users">("dashboard");
 
   const [nlDraft, setNlDraft] = useState<NLDraft | null>(null);
@@ -181,6 +187,37 @@ export default function AdminPage() {
       setUsers(updated);
     } catch {
       toast.error("Erreur.");
+    }
+  }
+
+  async function handleSetTeams(match: Match) {
+    const sel = teamInputs[match.id] ?? {
+      home: match.homeTeamId,
+      away: match.awayTeamId,
+    };
+    const home = WC2026_TEAMS.find((t) => t.id === sel.home);
+    const away = WC2026_TEAMS.find((t) => t.id === sel.away);
+    if (!home || !away) {
+      toast.error("Sélectionne les deux équipes.");
+      return;
+    }
+    if (home.id === away.id) {
+      toast.error("Les deux équipes doivent être différentes.");
+      return;
+    }
+    setTeamsSaving(match.id);
+    try {
+      await updateMatchTeams(match.id, home, away);
+      // Recalcul : si le match est déjà terminé, changer les équipes change le
+      // scoring. Sans effet (idempotent) sinon.
+      await callSyncAPI("recalc");
+      toast.success("Équipes mises à jour — tableau et classement recalculés !");
+      const updated = await getAllUsers();
+      setUsers(updated);
+    } catch {
+      toast.error("Erreur lors de la mise à jour des équipes.");
+    } finally {
+      setTeamsSaving(null);
     }
   }
 
@@ -482,6 +519,10 @@ export default function AdminPage() {
                   away: match.awayScore !== null ? String(match.awayScore) : "",
                   qualified: match.qualifiedTeamId ?? "",
                 };
+                const tin = teamInputs[match.id] ?? {
+                  home: match.homeTeamId,
+                  away: match.awayTeamId,
+                };
 
                 return (
                   <div key={match.id} className="glass rounded-2xl overflow-hidden">
@@ -515,6 +556,46 @@ export default function AdminPage() {
                         className="px-4 pb-4 border-t border-white/8"
                       >
                         <div className="pt-4 space-y-4">
+                          {match.phase !== "group" && (
+                            <div className="pb-4 border-b border-white/8">
+                              <p className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3">
+                                Équipes du match
+                              </p>
+                              <div className="flex items-center gap-2">
+                                <select
+                                  value={tin.home}
+                                  onChange={(e) => setTeamInputs((prev) => ({ ...prev, [match.id]: { ...tin, home: e.target.value } }))}
+                                  className="input-field text-sm flex-1 py-2"
+                                >
+                                  {WC2026_TEAMS.map((t) => (
+                                    <option key={t.id} value={t.id} className="bg-navy">{t.name}</option>
+                                  ))}
+                                </select>
+                                <span className="text-white/30 font-bold text-xs shrink-0">vs</span>
+                                <select
+                                  value={tin.away}
+                                  onChange={(e) => setTeamInputs((prev) => ({ ...prev, [match.id]: { ...tin, away: e.target.value } }))}
+                                  className="input-field text-sm flex-1 py-2"
+                                >
+                                  {WC2026_TEAMS.map((t) => (
+                                    <option key={t.id} value={t.id} className="bg-navy">{t.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <button
+                                onClick={() => handleSetTeams(match)}
+                                disabled={teamsSaving === match.id}
+                                className="btn-outline flex items-center gap-2 text-sm py-2 mt-3 disabled:opacity-40"
+                              >
+                                {teamsSaving === match.id ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                                Enregistrer les équipes
+                              </button>
+                              <p className="text-[10px] text-white/25 mt-2">
+                                Filet de sécurité si la synchro du calendrier a mal placé une équipe. Le tableau et le classement se mettent à jour après enregistrement.
+                              </p>
+                            </div>
+                          )}
+
                           <div>
                             <p className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3">
                               Résultat officiel
